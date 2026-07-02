@@ -10,105 +10,237 @@
  *
  * 課金: ANTHROPIC_API_KEY が設定されていれば Anthropic API の従量課金。
  * Claude のサブスクリプションは不要。
+ *
+ * 対応OS: macOS / Linux / Windows
+ * - プロンプトは argv ではなく stdin で渡す (Windows の shell 実行でも安全)
+ * - キャンセル時は子プロセスを kill (課金の垂れ流しを防ぐ)
+ * - FABLE_MAX_TURNS で 1回の呼び出しの探索ターン数に上限
+ * - 実行中は MCP 進捗通知で Fable の活動 (読んでいるファイル等) を流す
  */
 
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+const VERSION = "0.2.0";
 const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
-const MAX_BUFFER = 64 * 1024 * 1024;
+const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
+const HEARTBEAT_MS = 20 * 1000;
+const IS_WIN = process.platform === "win32";
+
+const MODEL_RE = /^[\w.:-]+$/;
+const SESSION_ID_RE = /^[0-9a-fA-F][0-9a-fA-F-]{7,63}$/;
 
 const log = (...args) => console.error("[fable-mcp]", ...args);
 
 /**
  * claude バイナリの解決順:
  * 1. FABLE_CLAUDE_BIN 環境変数
- * 2. この server を動かしている node と同じディレクトリ (nvm 環境で確実)
- * 3. PATH 上の "claude"
+ * 2. この server を動かしている node と同じディレクトリ (npm -g / nvm 環境で確実)
+ * 3. PATH 上の "claude" (Windows は shell 経由なので .cmd も解決される)
  */
 function resolveClaudeBin() {
   if (process.env.FABLE_CLAUDE_BIN) return process.env.FABLE_CLAUDE_BIN;
-  const sibling = join(dirname(process.execPath), "claude");
-  if (existsSync(sibling)) return sibling;
+  const dir = dirname(process.execPath);
+  const names = IS_WIN ? ["claude.cmd", "claude.exe", "claude"] : ["claude"];
+  for (const name of names) {
+    const candidate = join(dir, name);
+    if (existsSync(candidate)) return candidate;
+  }
   return "claude";
 }
 
 const CLAUDE_BIN = resolveClaudeBin();
 
-function runClaude({ prompt, cwd, sessionId }) {
+const CLAUDE_NOT_FOUND =
+  `claude CLI が見つかりません (${CLAUDE_BIN})。\n` +
+  `Claude Code をインストールしてください: npm i -g @anthropic-ai/claude-code\n` +
+  `別の場所にある場合は FABLE_CLAUDE_BIN 環境変数でフルパスを指定してください。`;
+
+/**
+ * claude -p を起動して完了まで待つ。
+ * - prompt は stdin で渡す (argv に任意文字列を載せない)
+ * - onProgress(message) は Fable がツールを使うたび / 20秒ごとの生存確認で呼ばれる
+ * - signal (AbortSignal) が中断されたら子プロセスを kill する
+ */
+function runClaude({ prompt, cwd, sessionId, onProgress, signal }) {
   return new Promise((resolve) => {
+    if (!MODEL_RE.test(MODEL)) {
+      resolve({ isError: true, text: `FABLE_MODEL の値が不正です: ${MODEL}` });
+      return;
+    }
+    if (sessionId && !SESSION_ID_RE.test(sessionId)) {
+      resolve({
+        isError: true,
+        text: "session_id の形式が不正です。前回応答の [fable-mcp] フッターの値をそのまま渡してください。",
+      });
+      return;
+    }
+
     const args = [
       "-p",
-      prompt,
       "--model",
       MODEL,
       "--permission-mode",
       "plan",
       "--output-format",
-      "json",
+      "stream-json",
+      "--verbose",
     ];
+    if (MAX_TURNS > 0) args.push("--max-turns", String(MAX_TURNS));
     if (sessionId) args.push("--resume", sessionId);
 
+    // Windows は .cmd 起動のため shell 経由。パスの空白対策で引用符を付ける。
+    // 可変値は stdin(prompt) と検証済みの MODEL / sessionId のみなので安全。
+    const command = IS_WIN ? `"${CLAUDE_BIN}"` : CLAUDE_BIN;
+
     const startedAt = Date.now();
-    log(`spawn: ${CLAUDE_BIN} (model=${MODEL}, cwd=${cwd || process.cwd()}, resume=${sessionId || "-"})`);
+    log(`spawn: ${CLAUDE_BIN} (model=${MODEL}, cwd=${cwd || process.cwd()}, resume=${sessionId || "-"}, maxTurns=${MAX_TURNS || "∞"})`);
 
-    execFile(
-      CLAUDE_BIN,
-      args,
-      { cwd: cwd || process.cwd(), timeout: TIMEOUT_MS, maxBuffer: MAX_BUFFER, env: process.env },
-      (err, stdout, stderr) => {
-        const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+    let child;
+    try {
+      child = spawn(command, args, {
+        cwd: cwd || process.cwd(),
+        env: process.env,
+        shell: IS_WIN,
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (e) {
+      resolve({ isError: true, text: e.code === "ENOENT" ? CLAUDE_NOT_FOUND : String(e) });
+      return;
+    }
 
-        if (err && err.code === "ENOENT") {
-          resolve({
-            isError: true,
-            text:
-              `claude CLI が見つかりません (${CLAUDE_BIN})。\n` +
-              `Claude Code をインストールしてください: npm i -g @anthropic-ai/claude-code\n` +
-              `別の場所にある場合は FABLE_CLAUDE_BIN 環境変数でフルパスを指定してください。`,
-          });
-          return;
-        }
-        if (err && err.killed) {
-          resolve({
-            isError: true,
-            text: `Fable の応答がタイムアウトしました (${Math.round(TIMEOUT_MS / 60000)}分)。タスクを分割するか FABLE_TIMEOUT_MS を延ばしてください。`,
-          });
-          return;
-        }
+    let settled = false;
+    let timedOut = false;
+    let aborted = false;
+    let resultEvent = null;
+    let stdoutBuf = "";
+    let stderrTail = "";
+    let progressCount = 0;
 
-        let parsed = null;
-        try {
-          parsed = JSON.parse(stdout);
-        } catch {
-          /* JSON でなければ生テキストとして扱う */
-        }
-
-        if (parsed && typeof parsed.result === "string") {
-          const cost =
-            typeof parsed.total_cost_usd === "number" ? `$${parsed.total_cost_usd.toFixed(2)}` : "n/a";
-          const footer =
-            `\n\n---\n[fable-mcp] session_id: ${parsed.session_id || "n/a"}` +
-            ` (同じ会話を続けるには次回この session_id を渡す) | cost: ${cost} | ${elapsedSec}s`;
-          resolve({ isError: Boolean(parsed.is_error), text: parsed.result + footer });
-          return;
-        }
-
-        // JSON が取れなかった / 想定外の形 → 生の出力とエラーを返す
-        const raw = [stdout && `stdout:\n${stdout}`, stderr && `stderr:\n${stderr}`, err && `error: ${err.message}`]
-          .filter(Boolean)
-          .join("\n\n");
-        resolve({
-          isError: Boolean(err),
-          text: raw || "claude CLI から出力がありませんでした。",
-        });
+    const emitProgress = (message) => {
+      progressCount++;
+      try {
+        onProgress?.(progressCount, message);
+      } catch {
+        /* 進捗通知の失敗で本体を落とさない */
       }
-    );
+    };
+
+    const killTimer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 5000).unref();
+    }, TIMEOUT_MS);
+
+    const heartbeat = setInterval(() => {
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      emitProgress(`推論中... ${elapsed}秒経過`);
+    }, HEARTBEAT_MS);
+
+    const onAbort = () => {
+      aborted = true;
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 5000).unref();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    const cleanup = () => {
+      clearTimeout(killTimer);
+      clearInterval(heartbeat);
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    const handleEvent = (ev) => {
+      if (ev.type === "result") {
+        resultEvent = ev;
+        return;
+      }
+      if (ev.type === "assistant") {
+        for (const c of ev.message?.content || []) {
+          if (c.type === "tool_use") {
+            const target = c.input?.file_path || c.input?.pattern || c.input?.command || c.input?.path || "";
+            emitProgress(`${c.name} ${String(target)}`.trim().slice(0, 120));
+          }
+        }
+      }
+    };
+
+    child.stdout.on("data", (chunk) => {
+      stdoutBuf += chunk;
+      let idx;
+      while ((idx = stdoutBuf.indexOf("\n")) >= 0) {
+        const line = stdoutBuf.slice(0, idx).trim();
+        stdoutBuf = stdoutBuf.slice(idx + 1);
+        if (!line) continue;
+        try {
+          handleEvent(JSON.parse(line));
+        } catch {
+          /* JSON でない行は無視 */
+        }
+      }
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderrTail = (stderrTail + chunk).slice(-4000);
+    });
+
+    child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve({ isError: true, text: e.code === "ENOENT" ? CLAUDE_NOT_FOUND : String(e) });
+    });
+
+    child.on("close", (code, sig) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+
+      if (aborted) {
+        resolve({ isError: true, text: "キャンセルされました。Fable のプロセスは停止済みで、以降の課金は発生しません。" });
+        return;
+      }
+      if (timedOut) {
+        resolve({
+          isError: true,
+          text: `Fable の応答がタイムアウトしました (${Math.round(TIMEOUT_MS / 60000)}分)。タスクを分割するか FABLE_TIMEOUT_MS を延ばしてください。`,
+        });
+        return;
+      }
+      if (resultEvent && typeof resultEvent.result === "string") {
+        const cost =
+          typeof resultEvent.total_cost_usd === "number" ? `$${resultEvent.total_cost_usd.toFixed(2)}` : "n/a";
+        const turns = resultEvent.num_turns != null ? `${resultEvent.num_turns} turns` : "";
+        const capNote =
+          resultEvent.subtype === "error_max_turns"
+            ? `\n\n⚠️ ターン数上限 (${MAX_TURNS}) に達したため途中までの結果です。続きは session_id を渡して依頼するか、FABLE_MAX_TURNS を増やしてください。`
+            : "";
+        const footer =
+          `${capNote}\n\n---\n[fable-mcp] session_id: ${resultEvent.session_id || "n/a"}` +
+          ` (同じ会話を続けるには次回この session_id を渡す) | cost: ${cost} | ${turns} | ${elapsedSec}s`;
+        resolve({ isError: Boolean(resultEvent.is_error), text: resultEvent.result + footer });
+        return;
+      }
+      resolve({
+        isError: true,
+        text:
+          `claude が結果を返さず終了しました (exit ${code}${sig ? `, ${sig}` : ""})。\n` +
+          (stderrTail ? `stderr:\n${stderrTail}` : "認証 (claude ログイン or ANTHROPIC_API_KEY) を確認してください。"),
+      });
+    });
+
+    child.stdin.on("error", () => {
+      /* 子プロセスが即死した場合の EPIPE を無視 (close で処理される) */
+    });
+    child.stdin.write(prompt);
+    child.stdin.end();
   });
 }
 
@@ -116,7 +248,23 @@ function toToolResult({ isError, text }) {
   return { content: [{ type: "text", text }], isError };
 }
 
-const server = new McpServer({ name: "fable-mcp", version: "0.1.0" });
+/** MCP クライアントが progressToken を渡してきた場合のみ進捗通知を送る */
+function makeProgressReporter(extra) {
+  const progressToken = extra?._meta?.progressToken;
+  return (progress, message) => {
+    log(`progress: ${message}`);
+    if (progressToken !== undefined && typeof extra?.sendNotification === "function") {
+      extra
+        .sendNotification({
+          method: "notifications/progress",
+          params: { progressToken, progress, message: `Fable: ${message}` },
+        })
+        .catch(() => {});
+    }
+  };
+}
+
+const server = new McpServer({ name: "fable-mcp", version: VERSION });
 
 server.tool(
   "fable_plan",
@@ -133,7 +281,7 @@ server.tool(
       .optional()
       .describe("前回の応答に含まれる session_id。渡すと同じ会話の続きとしてフォローアップできる。"),
   },
-  async ({ task, cwd, session_id }) => {
+  async ({ task, cwd, session_id }, extra) => {
     const prompt = `あなたは2エージェント構成の「アーキテクト」役です。あなた (Claude Fable 5) が設計し、別の実装エージェント (Codex) がコードを書きます。
 
 このリポジトリを必要なだけ探索し、深く考えた上で、以下のタスクの実装プランを書いてください。プランは実装エージェントがそのまま実行できる具体性で:
@@ -148,7 +296,9 @@ server.tool(
 <task>
 ${task}
 </task>`;
-    return toToolResult(await runClaude({ prompt, cwd, sessionId: session_id }));
+    return toToolResult(
+      await runClaude({ prompt, cwd, sessionId: session_id, onProgress: makeProgressReporter(extra), signal: extra?.signal })
+    );
   }
 );
 
@@ -166,13 +316,15 @@ server.tool(
       .optional()
       .describe("前回の応答に含まれる session_id。渡すと同じ会話の続きになる。"),
   },
-  async ({ question, cwd, session_id }) => {
+  async ({ question, cwd, session_id }, extra) => {
     const prompt = `あなたは深い推論を行うコンサルタントです。以下の質問に、必要ならこのリポジトリの関連ファイルを確認した上で、よく考えて答えてください。質問と同じ言語で回答してください。
 
 <question>
 ${question}
 </question>`;
-    return toToolResult(await runClaude({ prompt, cwd, sessionId: session_id }));
+    return toToolResult(
+      await runClaude({ prompt, cwd, sessionId: session_id, onProgress: makeProgressReporter(extra), signal: extra?.signal })
+    );
   }
 );
 
@@ -190,17 +342,19 @@ server.tool(
       .optional()
       .describe("fable_plan と同じ会話でレビューさせたい場合、その session_id。"),
   },
-  async ({ cwd, context, session_id }) => {
+  async ({ cwd, context, session_id }, extra) => {
     const prompt = `あなたは別のエージェントが書いた実装のレビュアーです。git status / git diff / git diff --staged で現在の変更を確認し、必要なら周辺コードも読んだ上で、以下を報告してください:
 - バグ・正しさの問題 (file:line 付き)
 - 意図された設計からの乖離
 - 簡素化・再利用の余地
 重大度順に。特に問題がなければ簡潔にそう言ってください。
 ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : ""}`;
-    return toToolResult(await runClaude({ prompt, cwd, sessionId: session_id }));
+    return toToolResult(
+      await runClaude({ prompt, cwd, sessionId: session_id, onProgress: makeProgressReporter(extra), signal: extra?.signal })
+    );
   }
 );
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-log(`ready (model=${MODEL}, claude=${CLAUDE_BIN})`);
+log(`ready v${VERSION} (model=${MODEL}, claude=${CLAUDE_BIN}, platform=${process.platform})`);

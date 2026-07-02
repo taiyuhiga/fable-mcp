@@ -1,6 +1,6 @@
 {
   "name": "fable-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server that lets any MCP client (OpenAI Codex, etc.) consult Claude Fable 5 as a deep-reasoning architect, via Claude Code headless mode",
   "type": "module",
   "main": "server.mjs",
