@@ -106,6 +106,7 @@ Codex アプリでプロジェクトを開き、「**Fable5にこのプロジェ
 |---|---|---|
 | `ANTHROPIC_API_KEY` | (なし) | API 従量課金で動かすためのキー。未設定なら claude CLI の現在のログイン認証で動く |
 | `FABLE_MODEL` | `claude-fable-5` | 使うモデル。コストを抑えたければ `claude-opus-4-8` 等に変更可 |
+| `FABLE_EFFORT` | (モデルのデフォルト = high 相当) | 推論の深さ: `low` / `medium` / `high` / `xhigh` / `max`。設計の質を最優先なら `xhigh`、コスト優先なら `medium` |
 | `FABLE_MAX_TURNS` | `60` | 1回の呼び出しで Fable が使える探索ターン数の上限（コスト暴走防止）。`0` で無制限。上限に達すると途中結果と続行方法が返る |
 | `FABLE_TIMEOUT_MS` | `1200000` (20分) | 1回の呼び出しのタイムアウト |
 | `FABLE_CLAUDE_BIN` | 自動解決 | claude CLI のフルパス (自動解決に失敗する場合のみ) |

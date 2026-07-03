@@ -29,6 +29,8 @@ const VERSION = "0.2.0";
 const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
 const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
+const EFFORT = process.env.FABLE_EFFORT || ""; // 空ならモデルのデフォルト (high 相当)
+const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const HEARTBEAT_MS = 20 * 1000;
 const IS_WIN = process.platform === "win32";
 
@@ -97,6 +99,13 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal }) {
       "stream-json",
       "--verbose",
     ];
+    if (EFFORT) {
+      if (!EFFORT_LEVELS.has(EFFORT)) {
+        resolve({ isError: true, text: `FABLE_EFFORT の値が不正です: ${EFFORT} (low / medium / high / xhigh / max)` });
+        return;
+      }
+      args.push("--effort", EFFORT);
+    }
     if (MAX_TURNS > 0) args.push("--max-turns", String(MAX_TURNS));
     if (sessionId) args.push("--resume", sessionId);
 
