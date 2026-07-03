@@ -248,6 +248,16 @@ function toToolResult({ isError, text }) {
   return { content: [{ type: "text", text }], isError };
 }
 
+/** Fable の出力を要約せずそのまま中継させるための、実装エージェント向け指示 */
+function withRelayDirective(res, what, extraNote = "") {
+  if (!res.isError) {
+    res.text +=
+      `\n[fable-mcp→実装エージェントへ] この${what}が正です。ユーザーに提示するときは要約・言い換え・再構成をせず全文をそのまま提示してください。` +
+      (extraNote || `あなた自身の補足や意見がある場合は Fable の${what}とは分けて別記してください。`);
+  }
+  return res;
+}
+
 /** MCP クライアントが progressToken を渡してきた場合のみ進捗通知を送る */
 function makeProgressReporter(extra) {
   const progressToken = extra?._meta?.progressToken;
@@ -297,11 +307,9 @@ server.tool(
 ${task}
 </task>`;
     const res = await runClaude({ prompt, cwd, sessionId: session_id, onProgress: makeProgressReporter(extra), signal: extra?.signal });
-    if (!res.isError) {
-      res.text +=
-        "\n[fable-mcp→実装エージェントへ] このプランが正です。ユーザーに提示するときは要約・言い換え・再構成をせず全文をそのまま提示し、変更が必要な場合のみ「Fableプランからの変更点」として差分と理由を別記してください。";
-    }
-    return toToolResult(res);
+    return toToolResult(
+      withRelayDirective(res, "プラン", "変更が必要な場合のみ「Fableプランからの変更点」として差分と理由を別記してください。")
+    );
   }
 );
 
@@ -325,9 +333,8 @@ server.tool(
 <question>
 ${question}
 </question>`;
-    return toToolResult(
-      await runClaude({ prompt, cwd, sessionId: session_id, onProgress: makeProgressReporter(extra), signal: extra?.signal })
-    );
+    const res = await runClaude({ prompt, cwd, sessionId: session_id, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    return toToolResult(withRelayDirective(res, "回答"));
   }
 );
 
@@ -352,8 +359,9 @@ server.tool(
 - 簡素化・再利用の余地
 重大度順に。特に問題がなければ簡潔にそう言ってください。
 ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : ""}`;
+    const res = await runClaude({ prompt, cwd, sessionId: session_id, onProgress: makeProgressReporter(extra), signal: extra?.signal });
     return toToolResult(
-      await runClaude({ prompt, cwd, sessionId: session_id, onProgress: makeProgressReporter(extra), signal: extra?.signal })
+      withRelayDirective(res, "レビュー結果", "指摘の file:line や重大度順を崩さないでください。対応方針はレビュー全文を提示した後に別記してください。")
     );
   }
 );
