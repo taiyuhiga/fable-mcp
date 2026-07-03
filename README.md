@@ -71,6 +71,8 @@ ANTHROPIC_API_KEY = "sk-ant-..."        # あなたの API キー（従量課金
 - プランに疑問があれば、応答末尾の session_id を付けて追加質問する。
 - ユーザーが「Fable」「Fable5」「フェイブル」に言及したら
   (例:「Fable5に聞いて」)、その内容を fable_ask / fable_plan に渡す。
+- ユーザーが「じっくり/深く考えさせて」と言ったら effort: "max" (または xhigh)、
+  「軽く/サクッと」なら effort: "medium" をツール引数に渡す。
 - Fable の出力 (プラン・回答・レビュー結果) は要約・言い換えせず全文を
   そのままユーザーに提示する。自分の補足は分けて別記する。
 - 大きな実装が完了したら fable_review でレビューを受ける (任意)。
@@ -107,7 +109,7 @@ Codex アプリでプロジェクトを開き、「**Fable5にこのプロジェ
 |---|---|---|
 | `ANTHROPIC_API_KEY` | (なし) | API 従量課金で動かすためのキー。未設定なら claude CLI の現在のログイン認証で動く |
 | `FABLE_MODEL` | `claude-fable-5` | 使うモデル。コストを抑えたければ `claude-opus-4-8` 等に変更可 |
-| `FABLE_EFFORT` | (モデルのデフォルト = high 相当) | 推論の深さ: `low` / `medium` / `high` / `xhigh` / `max`。設計の質を最優先なら `xhigh`、コスト優先なら `medium` |
+| `FABLE_EFFORT` | (モデルのデフォルト = high 相当) | 推論の深さのデフォルト: `low` / `medium` / `high` / `xhigh` / `max`。各ツールの `effort` 引数で呼び出しごとに上書き可（「Fable5にmaxで考えさせて」のように言えば Codex が渡す） |
 | `FABLE_MAX_TURNS` | `60` | 1回の呼び出しで Fable が使える探索ターン数の上限（コスト暴走防止）。`0` で無制限。上限に達すると途中結果と続行方法が返る |
 | `FABLE_TIMEOUT_MS` | `1200000` (20分) | 1回の呼び出しのタイムアウト |
 | `FABLE_CLAUDE_BIN` | 自動解決 | claude CLI のフルパス (自動解決に失敗する場合のみ) |

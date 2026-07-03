@@ -25,7 +25,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
 const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
@@ -69,10 +69,16 @@ const CLAUDE_NOT_FOUND =
  * - onProgress(message) は Fable がツールを使うたび / 20秒ごとの生存確認で呼ばれる
  * - signal (AbortSignal) が中断されたら子プロセスを kill する
  */
-function runClaude({ prompt, cwd, sessionId, onProgress, signal }) {
+function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
   return new Promise((resolve) => {
     if (!MODEL_RE.test(MODEL)) {
       resolve({ isError: true, text: `FABLE_MODEL の値が不正です: ${MODEL}` });
+      return;
+    }
+    // 呼び出しごとの effort 指定 > FABLE_EFFORT 環境変数 > モデルのデフォルト
+    const effortLevel = effort || EFFORT;
+    if (effortLevel && !EFFORT_LEVELS.has(effortLevel)) {
+      resolve({ isError: true, text: `effort の値が不正です: ${effortLevel} (low / medium / high / xhigh / max)` });
       return;
     }
     if (sessionId && !SESSION_ID_RE.test(sessionId)) {
@@ -99,13 +105,7 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal }) {
       "stream-json",
       "--verbose",
     ];
-    if (EFFORT) {
-      if (!EFFORT_LEVELS.has(EFFORT)) {
-        resolve({ isError: true, text: `FABLE_EFFORT の値が不正です: ${EFFORT} (low / medium / high / xhigh / max)` });
-        return;
-      }
-      args.push("--effort", EFFORT);
-    }
+    if (effortLevel) args.push("--effort", effortLevel);
     if (MAX_TURNS > 0) args.push("--max-turns", String(MAX_TURNS));
     if (sessionId) args.push("--resume", sessionId);
 
@@ -114,7 +114,7 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal }) {
     const command = IS_WIN ? `"${CLAUDE_BIN}"` : CLAUDE_BIN;
 
     const startedAt = Date.now();
-    log(`spawn: ${CLAUDE_BIN} (model=${MODEL}, cwd=${cwd || process.cwd()}, resume=${sessionId || "-"}, maxTurns=${MAX_TURNS || "∞"})`);
+    log(`spawn: ${CLAUDE_BIN} (model=${MODEL}, effort=${effortLevel || "default"}, cwd=${cwd || process.cwd()}, resume=${sessionId || "-"}, maxTurns=${MAX_TURNS || "∞"})`);
 
     let child;
     try {
@@ -239,7 +239,7 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal }) {
             : "";
         const footer =
           `${capNote}\n\n---\n[fable-mcp] session_id: ${resultEvent.session_id || "n/a"}` +
-          ` (同じ会話を続けるには次回この session_id を渡す) | cost: ${cost} | ${turns} | ${elapsedSec}s`;
+          ` (同じ会話を続けるには次回この session_id を渡す) | effort: ${effortLevel || "default(high)"} | cost: ${cost} | ${turns} | ${elapsedSec}s`;
         resolve({ isError: Boolean(resultEvent.is_error), text: resultEvent.result + footer });
         return;
       }
@@ -305,8 +305,14 @@ server.tool(
       .string()
       .optional()
       .describe("前回の応答に含まれる session_id。渡すと同じ会話の続きとしてフォローアップできる。"),
+    effort: z
+      .enum(["low", "medium", "high", "xhigh", "max"])
+      .optional()
+      .describe(
+        "推論の深さ。ユーザーが「じっくり/深く/本気で」と言ったら xhigh か max、「軽く/サクッと」と言ったら medium。未指定ならサーバーのデフォルト。"
+      ),
   },
-  async ({ task, cwd, session_id }, extra) => {
+  async ({ task, cwd, session_id, effort }, extra) => {
     const prompt = `あなたは2エージェント構成の「アーキテクト」役です。あなた (Claude Fable 5) が設計し、別の実装エージェント (Codex) がコードを書きます。
 
 このリポジトリを必要なだけ探索し、深く考えた上で、以下のタスクの実装プランを書いてください。プランは実装エージェントがそのまま実行できる具体性で:
@@ -321,7 +327,7 @@ server.tool(
 <task>
 ${task}
 </task>`;
-    const res = await runClaude({ prompt, cwd, sessionId: session_id, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
     return toToolResult(
       withRelayDirective(res, "プラン", "変更が必要な場合のみ「Fableプランからの変更点」として差分と理由を別記してください。")
     );
@@ -341,14 +347,20 @@ server.tool(
       .string()
       .optional()
       .describe("前回の応答に含まれる session_id。渡すと同じ会話の続きになる。"),
+    effort: z
+      .enum(["low", "medium", "high", "xhigh", "max"])
+      .optional()
+      .describe(
+        "推論の深さ。ユーザーが「じっくり/深く/本気で」と言ったら xhigh か max、「軽く/サクッと」と言ったら medium。未指定ならサーバーのデフォルト。"
+      ),
   },
-  async ({ question, cwd, session_id }, extra) => {
+  async ({ question, cwd, session_id, effort }, extra) => {
     const prompt = `あなたは深い推論を行うコンサルタントです。以下の質問に、必要ならこのリポジトリの関連ファイルを確認した上で、よく考えて答えてください。質問と同じ言語で回答してください。
 
 <question>
 ${question}
 </question>`;
-    const res = await runClaude({ prompt, cwd, sessionId: session_id, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
     return toToolResult(withRelayDirective(res, "回答"));
   }
 );
@@ -366,15 +378,21 @@ server.tool(
       .string()
       .optional()
       .describe("fable_plan と同じ会話でレビューさせたい場合、その session_id。"),
+    effort: z
+      .enum(["low", "medium", "high", "xhigh", "max"])
+      .optional()
+      .describe(
+        "推論の深さ。徹底的なレビューなら xhigh、軽い確認なら medium。未指定ならサーバーのデフォルト。"
+      ),
   },
-  async ({ cwd, context, session_id }, extra) => {
+  async ({ cwd, context, session_id, effort }, extra) => {
     const prompt = `あなたは別のエージェントが書いた実装のレビュアーです。git status / git diff / git diff --staged で現在の変更を確認し、必要なら周辺コードも読んだ上で、以下を報告してください:
 - バグ・正しさの問題 (file:line 付き)
 - 意図された設計からの乖離
 - 簡素化・再利用の余地
 重大度順に。特に問題がなければ簡潔にそう言ってください。
 ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : ""}`;
-    const res = await runClaude({ prompt, cwd, sessionId: session_id, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
     return toToolResult(
       withRelayDirective(res, "レビュー結果", "指摘の file:line や重大度順を崩さないでください。対応方針はレビュー全文を提示した後に別記してください。")
     );
