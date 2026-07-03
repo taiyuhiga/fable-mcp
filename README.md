@@ -1,5 +1,7 @@
 # fable-mcp
 
+[![CI](https://github.com/taiyuhiga/fable-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/taiyuhiga/fable-mcp/actions/workflows/ci.yml)
+
 **Claude Fable 5 を「設計・深い推論役」として OpenAI Codex から使うための MCP サーバー。**
 
 Codex (実装役) の上に Fable 5 (アーキテクト役) を乗せる2エージェント構成を、Codex デスクトップアプリ / CLI 上で実現します。

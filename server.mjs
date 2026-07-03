@@ -81,6 +81,12 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal }) {
       return;
     }
 
+    // パス指定された claude が存在しない場合は、OS 差の出る spawn エラーを待たず即答する
+    if ((CLAUDE_BIN.includes("/") || CLAUDE_BIN.includes("\\")) && !existsSync(CLAUDE_BIN)) {
+      resolve({ isError: true, text: CLAUDE_NOT_FOUND });
+      return;
+    }
+
     const args = [
       "-p",
       "--model",
