@@ -1,6 +1,6 @@
 param(
   [switch]$DryRun,
-  [string]$Ref = "v0.7.2",
+  [string]$Ref = "v0.7.3",
   [switch]$NoClaudeInstall,
   [switch]$NoApiKey
 )
@@ -198,6 +198,10 @@ function Print-NextSteps {
   Write-Host @"
 
 Next steps:
+Installed/checked:
+- Claude Code CLI: used by fable-mcp to start Fable 5 in headless plan mode.
+- Codex Plugin/MCP: registers the fable MCP server for Codex.
+
 1. Restart the Codex app.
 2. If Codex asks whether to trust the bundled Stop hook, approve it.
 3. In a new Codex thread, ask:

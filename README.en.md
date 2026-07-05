@@ -6,32 +6,35 @@ Use Claude Fable 5 as a read-only deep-reasoning architect and evaluator from Op
 
 Japanese README: [README.md](README.md)
 
-## Easiest Setup: Paste The GitHub URL Into Codex
+## Easiest Setup: One Sentence
 
-For beginners, the easiest path is to paste this into Codex. You do not need to clone the repository or manually fill the custom MCP form.
+For beginners, the easiest path is to paste this one sentence into Codex, Claude Code, or another local AI coding agent. You do not need to clone the repository manually or fill the custom MCP form yourself.
 
 ```text
 Set up https://github.com/taiyuhiga/fable-mcp.
+```
 
-Follow the beginner setup in the README and do the whole setup:
+When an AI agent receives that sentence, it should treat this README plus `AGENTS.md` as the setup contract and complete the setup instead of stopping at a summary:
+
 1. Check that Node.js 18+ is installed
 2. Install Claude Code CLI with npm i -g @anthropic-ai/claude-code if it is missing
 3. Install the fable-mcp Codex Plugin
 4. Ask me only when ANTHROPIC_API_KEY is needed
 5. Verify that fable appears in codex mcp list
 6. Leave me ready to ask: Check the Fable status
-```
+
+If the request is handled by Claude Code, it can still install the Codex Plugin as long as the local `codex` CLI is available. If `codex` is missing, the agent should ask the user to install/open Codex first.
 
 If you prefer a terminal one-liner, use the command for your OS:
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.3/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.2/install.ps1 | iex
+irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.3/install.ps1 | iex
 ```
 
 The installer checks Node.js, Codex CLI, and Claude Code CLI, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
@@ -72,7 +75,7 @@ Prerequisites:
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.2
+codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.3
 codex plugin add fable-mcp@fable-mcp
 ```
 
