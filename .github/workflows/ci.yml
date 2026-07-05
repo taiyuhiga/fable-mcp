@@ -21,6 +21,16 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run check
+      - name: Installer scripts parse
+        shell: bash
+        run: |
+          bash -n install.sh
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoProfile -Command '$null = [scriptblock]::Create((Get-Content -Raw install.ps1))'
+          else
+            echo "pwsh not available on this runner; PowerShell parse check skipped"
+          fi
+
       - name: Plugin package is present
         shell: bash
         run: |

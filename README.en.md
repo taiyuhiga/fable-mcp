@@ -6,6 +6,36 @@ Use Claude Fable 5 as a read-only deep-reasoning architect and evaluator from Op
 
 Japanese README: [README.md](README.md)
 
+## Easiest Setup: Paste The GitHub URL Into Codex
+
+For beginners, the easiest path is to paste this into Codex. You do not need to clone the repository or manually fill the custom MCP form.
+
+```text
+Set up https://github.com/taiyuhiga/fable-mcp.
+
+Follow the beginner setup in the README and do the whole setup:
+1. Check that Node.js 18+ is installed
+2. Install Claude Code CLI with npm i -g @anthropic-ai/claude-code if it is missing
+3. Install the fable-mcp Codex Plugin
+4. Ask me only when ANTHROPIC_API_KEY is needed
+5. Verify that fable appears in codex mcp list
+6. Leave me ready to ask: Check the Fable status
+```
+
+If you prefer a terminal one-liner, use the command for your OS:
+
+```sh
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.6.1/install.sh | bash
+```
+
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.6.1/install.ps1 | iex
+```
+
+The installer checks Node.js, Codex CLI, and Claude Code CLI, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. Restart Codex when it finishes, then ask `Check the Fable status`.
+
 ```
 You -> Codex app (implementation agent)
           |
@@ -42,7 +72,7 @@ Prerequisites:
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.6.0
+codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.6.1
 codex plugin add fable-mcp@fable-mcp
 ```
 
