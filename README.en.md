@@ -26,12 +26,12 @@ If you prefer a terminal one-liner, use the command for your OS:
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.1/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.1/install.ps1 | iex
 ```
 
 The installer checks Node.js, Codex CLI, and Claude Code CLI, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
@@ -72,7 +72,7 @@ Prerequisites:
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.0
+codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.1
 codex plugin add fable-mcp@fable-mcp
 ```
 
@@ -138,7 +138,7 @@ In Codex Plan mode, the plugin instructions tell Codex to call `fable_plan` unle
 | `fable_plan` | Read-only Fable planning before implementation. Saves the verbatim plan to `.fable/last-plan.md`. Can initialize a criteria-approval quality loop with `loop_threshold`. |
 | `fable_ask` | Fable-backed questions, tradeoff analysis, and brainstorming. |
 | `fable_review` | Read-only implementation review. In quality-loop mode, records Fable's score, cumulative cost, and best snapshot into loop state. Supports optional ensemble scoring. |
-| `fable_loop_approve` | Activates a quality loop after the user approves the generated criteria. Local-only and free. |
+| `fable_loop_approve` | Activates a quality loop in `implementing` phase after the user approves the generated criteria. Local-only and free. |
 | `fable_loop_abort` | Safely aborts a quality loop without editing state files manually. Local-only and free. |
 | `fable_loop_restore_best` | Restores the highest-scoring git snapshot, limited to recorded write targets or explicit paths. Local-only and free. |
 
@@ -148,7 +148,19 @@ In Codex Plan mode, the plugin instructions tell Codex to call `fable_plan` unle
 
 When `fable_plan` is called with `loop_threshold`, it creates a loop under `.fable-loop/sessions/<loop_id>/` and leaves it awaiting criteria approval by default. Codex should show the generated `criteria.md` to the user, then call `fable_loop_approve` before implementation/review starts. The old v0.6 `.fable-loop/state.json` layout is still read for compatibility.
 
-During review, fable-mcp parses Fable's `<eval>{...}</eval>` score, records cumulative cost, captures git snapshots under `refs/fable-loop/<loop_id>/...`, and marks the best-scoring snapshot for optional restore. If a rate-limit event appears in Claude Code's stream, the progress message says that Fable is rate-limited instead of looking frozen.
+The Stop hook is phase-gated: it only continues or finishes a loop when `phase="eval"`, after `fable_review` has written a fresh score. It stays silent during criteria approval and implementation (`phase="implementing"`), so it does not block too early.
+
+During review, fable-mcp parses Fable's `<eval>{...}</eval>` score, records cumulative cost, captures git snapshots under `refs/fable-loop/<loop_id>/...`, and marks the best-scoring snapshot for optional restore. If a rate-limit event appears in Claude Code's stream, the progress message says that Fable is rate-limited instead of looking frozen. A UserPromptSubmit watchdog also warns locally about stale active loops and overlapping `write_targets`.
+
+## Acceptance Smoke
+
+Run the local, no-Fable smoke harness before releases:
+
+```sh
+npm run smoke
+```
+
+For a full live trial, use a new Codex thread and run `fable_plan -> show criteria -> fable_loop_approve -> implement -> fable_review -> Stop hook`. That full path calls Fable and can spend API credits.
 
 ## Environment Variables
 

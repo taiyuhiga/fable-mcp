@@ -21109,7 +21109,7 @@ var StdioServerTransport = class {
 };
 
 // server.mjs
-var VERSION = "0.7.0";
+var VERSION = "0.7.1";
 var MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 var TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1e3);
 var MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60);
@@ -21127,7 +21127,7 @@ Routing:
 - For setup/troubleshooting questions, call fable_status first. It is local-only and does not call Fable or spend API credits.
 - In Codex Plan mode, call fable_plan first unless the user explicitly says "without Fable" / "Fable\u306A\u3057".
 - In normal mode, call Fable only when the user mentions Fable/Fable5/Feyble/\u30D5\u30A7\u30A4\u30D6\u30EB, or asks for a quality loop.
-- For "\u5408\u683C\u307E\u3067\u56DE\u3057\u3066", "N\u70B9\u307E\u3067", or "loop/eval-loop", call fable_plan with loop_threshold, implement, then call fable_review.
+- For "\u5408\u683C\u307E\u3067\u56DE\u3057\u3066", "N\u70B9\u307E\u3067", or "loop/eval-loop", call fable_plan with loop_threshold, show the generated criteria, call fable_loop_approve after approval, implement, then call fable_review.
 
 Relay:
 - Fable output is canonical. Present plans, answers, and reviews verbatim. Do not summarize, rename sections, or reformat into Summary/Key Changes.
@@ -21458,7 +21458,7 @@ function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", eff
     loop_id: loopId,
     active: Boolean(autoApprove),
     criteria_approved: Boolean(autoApprove),
-    phase: autoApprove ? "active" : "awaiting_criteria_approval",
+    phase: autoApprove ? "implementing" : "awaiting_criteria_approval",
     iteration: 0,
     score: 0,
     passed: false,
@@ -21472,7 +21472,10 @@ function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", eff
     cumulative_cost_usd: typeof costUsd === "number" ? costUsd : 0,
     last_cost_usd: typeof costUsd === "number" ? costUsd : 0,
     fable_session_id: sessionId || "",
+    project_dir: cwd,
     effort: effort || "",
+    eval_repair_attempts: 0,
+    evaluated_iteration: null,
     snapshot_enabled: isGitRepo(cwd),
     snapshot_status: isGitRepo(cwd) ? "ready" : "disabled: not a git repository",
     write_targets: [],
@@ -21847,7 +21850,7 @@ function loopStatusLines(loop) {
     const cost = item.cumulativeCostUsd ? ` | cumulative cost ~$${item.cumulativeCostUsd.toFixed(4)}` : "";
     const best = item.bestIteration >= 0 ? ` | best ${item.bestScore}/100 at iteration ${item.bestIteration + 1}${item.bestSnapshotRef ? " (snapshot ready)" : ""}` : "";
     lines.push(
-      `- ${item.loopId}: ${marker}${item.active ? "active" : "inactive"} | ${approval} | iteration ${item.iteration}/${item.max} | score ${item.score}/${item.threshold} | passed: ${item.passed ? "yes" : "no"}${best}${cost}`
+      `- ${item.loopId}: ${marker}${item.active ? "active" : "inactive"} | phase ${item.phase} | ${approval} | iteration ${item.iteration}/${item.max} | score ${item.score}/${item.threshold} | passed: ${item.passed ? "yes" : "no"}${best}${cost}`
     );
     lines.push(`  state: ${item.statePath}`);
   }
@@ -21874,6 +21877,10 @@ function nextActionLines({ claude, hasApiKey, effort, timeoutValid, maxTurnsVali
     actions.push(`${actions.length + 1}. Inspect ${currentLoop.statePath}; the quality-loop state JSON is invalid.`);
   } else if (currentLoop?.valid && !currentLoop.criteriaApproved) {
     actions.push(`${actions.length + 1}. Review the criteria in the loop state, then call \`fable_loop_approve\` if the user accepts them.`);
+  } else if (currentLoop?.valid && currentLoop.active && currentLoop.phase === "implementing") {
+    actions.push(`${actions.length + 1}. Quality loop ${currentLoop.loopId} is waiting for implementation. Make the requested changes, then call \`fable_review\`.`);
+  } else if (currentLoop?.valid && currentLoop.active && currentLoop.phase === "eval" && !currentLoop.passed) {
+    actions.push(`${actions.length + 1}. Quality loop ${currentLoop.loopId} has a fresh evaluation. Let the Stop hook continue the loop, or inspect the latest turn feedback.`);
   } else if (currentLoop?.valid && currentLoop.active && !currentLoop.passed) {
     actions.push(`${actions.length + 1}. Quality loop ${currentLoop.loopId} is active. Implement the latest feedback, then call \`fable_review\` again.`);
   } else if (currentLoop?.valid && currentLoop.active && currentLoop.passed) {
@@ -21968,7 +21975,7 @@ server.tool(
 );
 server.tool(
   "fable_loop_approve",
-  "\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u53D7\u3051\u5165\u308C\u57FA\u6E96\u3092\u30E6\u30FC\u30B6\u30FC\u304C\u627F\u8A8D\u3057\u305F\u5F8C\u306B\u547C\u3076\u3002\u627F\u8A8D\u5F85\u3061\u306E loop_id \u3092 active \u306B\u3057\u3001\u4EE5\u5F8C fable_review \u3068 Stop hook \u304C\u30EB\u30FC\u30D7\u3092\u9032\u3081\u308B\u3002Fable \u672C\u4F53\u306F\u547C\u3070\u306A\u3044\u305F\u3081 API \u30B3\u30B9\u30C8\u306F\u767A\u751F\u3057\u306A\u3044\u3002",
+  "\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u53D7\u3051\u5165\u308C\u57FA\u6E96\u3092\u30E6\u30FC\u30B6\u30FC\u304C\u627F\u8A8D\u3057\u305F\u5F8C\u306B\u547C\u3076\u3002\u627F\u8A8D\u5F85\u3061\u306E loop_id \u3092 implementing phase \u3067 active \u306B\u3057\u3001\u5B9F\u88C5\u5F8C\u306E fable_review \u307E\u3067 Stop hook \u306F\u5DEE\u3057\u623B\u3055\u306A\u3044\u3002Fable \u672C\u4F53\u306F\u547C\u3070\u306A\u3044\u305F\u3081 API \u30B3\u30B9\u30C8\u306F\u767A\u751F\u3057\u306A\u3044\u3002",
   {
     cwd: external_exports.string().describe("\u5BFE\u8C61\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u306E\u30EB\u30FC\u30C8\u7D76\u5BFE\u30D1\u30B9\u3002"),
     loop_id: external_exports.string().optional().describe("\u627F\u8A8D\u3059\u308B loop_id\u3002\u7701\u7565\u6642\u306F\u73FE\u5728\u30EB\u30FC\u30D7\u3002")
@@ -21981,7 +21988,7 @@ server.tool(
     const state = loop.state;
     state.criteria_approved = true;
     state.active = true;
-    state.phase = "active";
+    state.phase = "implementing";
     state.ended_reason = "";
     state.approved_at = (/* @__PURE__ */ new Date()).toISOString();
     writeLoopState(loop, state);
@@ -22060,7 +22067,7 @@ server.tool(
       "\u63A8\u8AD6\u306E\u6DF1\u3055\u3002\u30E6\u30FC\u30B6\u30FC\u304C\u300C\u3058\u3063\u304F\u308A/\u6DF1\u304F/\u672C\u6C17\u3067\u300D\u3068\u8A00\u3063\u305F\u3089 xhigh \u304B max\u3001\u300C\u8EFD\u304F/\u30B5\u30AF\u30C3\u3068\u300D\u3068\u8A00\u3063\u305F\u3089 medium\u3002\u672A\u6307\u5B9A\u306A\u3089\u30B5\u30FC\u30D0\u30FC\u306E\u30C7\u30D5\u30A9\u30EB\u30C8\u3002"
     ),
     loop_threshold: external_exports.number().int().min(1).max(100).optional().describe(
-      "\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u5408\u683C\u70B9 (\u63A8\u5968: 90)\u3002\u6307\u5B9A\u3059\u308B\u3068\u30D7\u30E9\u30F3\u306B\u53D7\u3051\u5165\u308C\u57FA\u6E96 (\u63A1\u70B9\u8868) \u304C\u542B\u307E\u308C\u3001.fable-loop/ \u304C\u521D\u671F\u5316\u3055\u308C\u308B\u3002\u4EE5\u5F8C\u300C\u5B9F\u88C5 \u2192 fable_review \u63A1\u70B9 \u2192 \u672A\u9054\u306A\u3089 Stop \u30D5\u30C3\u30AF\u304C\u5DEE\u3057\u623B\u3057\u300D\u306E\u81EA\u52D5\u30EB\u30FC\u30D7\u304C\u56DE\u308B\u3002\u30E6\u30FC\u30B6\u30FC\u304C\u300C\u5408\u683C\u307E\u3067\u56DE\u3057\u3066\u300D\u300C\u25EF\u70B9\u307E\u3067\u4ED5\u4E0A\u3052\u3066\u300D\u300C\u30EB\u30FC\u30D7\u3067\u300D\u7B49\u3068\u8A00\u3063\u305F\u3068\u304D\u306B\u6307\u5B9A\u3059\u308B\u3002"
+      "\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u5408\u683C\u70B9 (\u63A8\u5968: 90)\u3002\u6307\u5B9A\u3059\u308B\u3068\u30D7\u30E9\u30F3\u306B\u53D7\u3051\u5165\u308C\u57FA\u6E96 (\u63A1\u70B9\u8868) \u304C\u542B\u307E\u308C\u3001\u627F\u8A8D\u5F85\u3061\u306E .fable-loop/ \u304C\u521D\u671F\u5316\u3055\u308C\u308B\u3002\u4EE5\u5F8C\u300C\u57FA\u6E96\u627F\u8A8D \u2192 \u5B9F\u88C5 \u2192 fable_review \u63A1\u70B9 \u2192 \u672A\u9054\u306A\u3089 Stop \u30D5\u30C3\u30AF\u304C\u5DEE\u3057\u623B\u3057\u300D\u306E\u81EA\u52D5\u30EB\u30FC\u30D7\u304C\u56DE\u308B\u3002\u30E6\u30FC\u30B6\u30FC\u304C\u300C\u5408\u683C\u307E\u3067\u56DE\u3057\u3066\u300D\u300C\u25EF\u70B9\u307E\u3067\u4ED5\u4E0A\u3052\u3066\u300D\u300C\u30EB\u30FC\u30D7\u3067\u300D\u7B49\u3068\u8A00\u3063\u305F\u3068\u304D\u306B\u6307\u5B9A\u3059\u308B\u3002"
     ),
     loop_max_iterations: external_exports.number().int().min(1).max(20).optional().describe("\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u6700\u5927\u5468\u56DE\u6570 (\u30C7\u30D5\u30A9\u30EB\u30C8 4)\u3002\u7121\u9650\u30EB\u30FC\u30D7\u9632\u6B62\u306E\u30D6\u30EC\u30FC\u30AD\u3002"),
     loop_auto_approve_criteria: external_exports.boolean().optional().describe(
@@ -22252,8 +22259,32 @@ ${item.text}`).join("\n\n---\n\n"),
       const evals = results.map((item) => parseEval(item.text));
       const ev = aggregateEvals(evals);
       if (!ev) {
+        updateLoopCost(state, res);
+        state.phase = "eval";
+        state.score = null;
+        state.passed = false;
+        state.last_eval_error = "missing_or_invalid_eval_json";
+        state.last_eval_error_at = (/* @__PURE__ */ new Date()).toISOString();
+        try {
+          const iter = Math.floor(state.iteration ?? 0);
+          writeFileSync(
+            join(loop.turnsDir, `turn-${String(iter).padStart(3, "0")}-invalid-eval.json`),
+            JSON.stringify(
+              {
+                error: "missing_or_invalid_eval_json",
+                evaluator_mode: evaluator_mode || "single",
+                raw_text: res.rawText || res.text,
+                evaluated_at: (/* @__PURE__ */ new Date()).toISOString()
+              },
+              null,
+              2
+            )
+          );
+          writeLoopState(loop, state);
+        } catch {
+        }
         res.isError = true;
-        res.text += "\n[fable-loop] \u63A1\u70B9JSON (<eval>{...}</eval>) \u3092\u53D6\u5F97\u3067\u304D\u306A\u304B\u3063\u305F\u305F\u3081\u3001state \u306F\u66F4\u65B0\u3057\u3066\u3044\u307E\u305B\u3093\u3002fable_review \u3092\u3082\u3046\u4E00\u5EA6\u547C\u3093\u3067\u304F\u3060\u3055\u3044\u3002";
+        res.text += "\n[fable-loop] \u63A1\u70B9JSON (<eval>{...}</eval>) \u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002state \u3092 phase=eval / score=null \u306B\u66F4\u65B0\u3057\u307E\u3057\u305F\u3002Stop hook \u304C\u4FEE\u5FA9\u6307\u793A\u3092\u51FA\u3057\u307E\u3059\u3002";
       } else {
         const score = Math.max(0, Math.min(100, Math.floor(ev.score)));
         const threshold = Math.floor(state.threshold ?? 90);
@@ -22288,7 +22319,10 @@ ${item.text}`).join("\n\n---\n\n"),
           state.iteration = iter + 1;
           state.score = score;
           state.passed = passed;
-          state.phase = passed ? "passed" : "active";
+          state.phase = "eval";
+          state.evaluated_iteration = iter + 1;
+          state.eval_repair_attempts = 0;
+          state.last_eval_error = "";
           if (score > (state.best_score ?? 0)) {
             state.best_score = score;
             state.best_iteration = iter;

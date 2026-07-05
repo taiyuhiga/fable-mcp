@@ -28,7 +28,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const VERSION = "0.7.0";
+const VERSION = "0.7.1";
 const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
 const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
@@ -49,7 +49,7 @@ Routing:
 - For setup/troubleshooting questions, call fable_status first. It is local-only and does not call Fable or spend API credits.
 - In Codex Plan mode, call fable_plan first unless the user explicitly says "without Fable" / "Fableなし".
 - In normal mode, call Fable only when the user mentions Fable/Fable5/Feyble/フェイブル, or asks for a quality loop.
-- For "合格まで回して", "N点まで", or "loop/eval-loop", call fable_plan with loop_threshold, implement, then call fable_review.
+- For "合格まで回して", "N点まで", or "loop/eval-loop", call fable_plan with loop_threshold, show the generated criteria, call fable_loop_approve after approval, implement, then call fable_review.
 
 Relay:
 - Fable output is canonical. Present plans, answers, and reviews verbatim. Do not summarize, rename sections, or reformat into Summary/Key Changes.
@@ -463,7 +463,7 @@ function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", eff
     loop_id: loopId,
     active: Boolean(autoApprove),
     criteria_approved: Boolean(autoApprove),
-    phase: autoApprove ? "active" : "awaiting_criteria_approval",
+    phase: autoApprove ? "implementing" : "awaiting_criteria_approval",
     iteration: 0,
     score: 0,
     passed: false,
@@ -477,7 +477,10 @@ function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", eff
     cumulative_cost_usd: typeof costUsd === "number" ? costUsd : 0,
     last_cost_usd: typeof costUsd === "number" ? costUsd : 0,
     fable_session_id: sessionId || "",
+    project_dir: cwd,
     effort: effort || "",
+    eval_repair_attempts: 0,
+    evaluated_iteration: null,
     snapshot_enabled: isGitRepo(cwd),
     snapshot_status: isGitRepo(cwd) ? "ready" : "disabled: not a git repository",
     write_targets: [],
@@ -893,7 +896,7 @@ function loopStatusLines(loop) {
         ? ` | best ${item.bestScore}/100 at iteration ${item.bestIteration + 1}${item.bestSnapshotRef ? " (snapshot ready)" : ""}`
         : "";
     lines.push(
-      `- ${item.loopId}: ${marker}${item.active ? "active" : "inactive"} | ${approval} | iteration ${item.iteration}/${item.max} | score ${item.score}/${item.threshold} | passed: ${item.passed ? "yes" : "no"}${best}${cost}`
+      `- ${item.loopId}: ${marker}${item.active ? "active" : "inactive"} | phase ${item.phase} | ${approval} | iteration ${item.iteration}/${item.max} | score ${item.score}/${item.threshold} | passed: ${item.passed ? "yes" : "no"}${best}${cost}`
     );
     lines.push(`  state: ${item.statePath}`);
   }
@@ -924,6 +927,10 @@ function nextActionLines({ claude, hasApiKey, effort, timeoutValid, maxTurnsVali
     actions.push(`${actions.length + 1}. Inspect ${currentLoop.statePath}; the quality-loop state JSON is invalid.`);
   } else if (currentLoop?.valid && !currentLoop.criteriaApproved) {
     actions.push(`${actions.length + 1}. Review the criteria in the loop state, then call ` + "`fable_loop_approve` if the user accepts them.");
+  } else if (currentLoop?.valid && currentLoop.active && currentLoop.phase === "implementing") {
+    actions.push(`${actions.length + 1}. Quality loop ${currentLoop.loopId} is waiting for implementation. Make the requested changes, then call ` + "`fable_review`.");
+  } else if (currentLoop?.valid && currentLoop.active && currentLoop.phase === "eval" && !currentLoop.passed) {
+    actions.push(`${actions.length + 1}. Quality loop ${currentLoop.loopId} has a fresh evaluation. Let the Stop hook continue the loop, or inspect the latest turn feedback.`);
   } else if (currentLoop?.valid && currentLoop.active && !currentLoop.passed) {
     actions.push(`${actions.length + 1}. Quality loop ${currentLoop.loopId} is active. Implement the latest feedback, then call ` + "`fable_review` again.");
   } else if (currentLoop?.valid && currentLoop.active && currentLoop.passed) {
@@ -1033,7 +1040,7 @@ server.tool(
 
 server.tool(
   "fable_loop_approve",
-  "品質ループの受け入れ基準をユーザーが承認した後に呼ぶ。承認待ちの loop_id を active にし、以後 fable_review と Stop hook がループを進める。Fable 本体は呼ばないため API コストは発生しない。",
+    "品質ループの受け入れ基準をユーザーが承認した後に呼ぶ。承認待ちの loop_id を implementing phase で active にし、実装後の fable_review まで Stop hook は差し戻さない。Fable 本体は呼ばないため API コストは発生しない。",
   {
     cwd: z.string().describe("対象プロジェクトのルート絶対パス。"),
     loop_id: z.string().optional().describe("承認する loop_id。省略時は現在ループ。"),
@@ -1046,7 +1053,7 @@ server.tool(
     const state = loop.state;
     state.criteria_approved = true;
     state.active = true;
-    state.phase = "active";
+    state.phase = "implementing";
     state.ended_reason = "";
     state.approved_at = new Date().toISOString();
     writeLoopState(loop, state);
@@ -1144,7 +1151,7 @@ server.tool(
       .max(100)
       .optional()
       .describe(
-        "品質ループの合格点 (推奨: 90)。指定するとプランに受け入れ基準 (採点表) が含まれ、.fable-loop/ が初期化される。以後「実装 → fable_review 採点 → 未達なら Stop フックが差し戻し」の自動ループが回る。ユーザーが「合格まで回して」「◯点まで仕上げて」「ループで」等と言ったときに指定する。"
+        "品質ループの合格点 (推奨: 90)。指定するとプランに受け入れ基準 (採点表) が含まれ、承認待ちの .fable-loop/ が初期化される。以後「基準承認 → 実装 → fable_review 採点 → 未達なら Stop フックが差し戻し」の自動ループが回る。ユーザーが「合格まで回して」「◯点まで仕上げて」「ループで」等と言ったときに指定する。"
       ),
     loop_max_iterations: z
       .number()
@@ -1386,9 +1393,34 @@ ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : 
       const evals = results.map((item) => parseEval(item.text));
       const ev = aggregateEvals(evals);
       if (!ev) {
+        updateLoopCost(state, res);
+        state.phase = "eval";
+        state.score = null;
+        state.passed = false;
+        state.last_eval_error = "missing_or_invalid_eval_json";
+        state.last_eval_error_at = new Date().toISOString();
+        try {
+          const iter = Math.floor(state.iteration ?? 0);
+          writeFileSync(
+            join(loop.turnsDir, `turn-${String(iter).padStart(3, "0")}-invalid-eval.json`),
+            JSON.stringify(
+              {
+                error: "missing_or_invalid_eval_json",
+                evaluator_mode: evaluator_mode || "single",
+                raw_text: res.rawText || res.text,
+                evaluated_at: new Date().toISOString(),
+              },
+              null,
+              2
+            )
+          );
+          writeLoopState(loop, state);
+        } catch {
+          /* best effort: the tool error below still tells the agent what happened */
+        }
         res.isError = true;
         res.text +=
-          "\n[fable-loop] 採点JSON (<eval>{...}</eval>) を取得できなかったため、state は更新していません。fable_review をもう一度呼んでください。";
+          "\n[fable-loop] 採点JSON (<eval>{...}</eval>) を取得できませんでした。state を phase=eval / score=null に更新しました。Stop hook が修復指示を出します。";
       } else {
         // passed は Fable の自己申告ではなく、ここで機械的に確定する
         const score = Math.max(0, Math.min(100, Math.floor(ev.score)));
@@ -1424,7 +1456,10 @@ ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : 
           state.iteration = iter + 1;
           state.score = score;
           state.passed = passed;
-          state.phase = passed ? "passed" : "active";
+          state.phase = "eval";
+          state.evaluated_iteration = iter + 1;
+          state.eval_repair_attempts = 0;
+          state.last_eval_error = "";
           if (score > (state.best_score ?? 0)) {
             state.best_score = score;
             state.best_iteration = iter;

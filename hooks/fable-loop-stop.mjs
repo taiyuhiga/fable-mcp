@@ -81,10 +81,54 @@ process.stdin.on("end", () => {
     return;
   }
 
-  const score = Math.floor(state.score ?? 0);
+  const phase = state.phase || "implementing";
+  if (phase !== "eval") {
+    out({});
+    return;
+  }
+
   const threshold = Math.floor(state.threshold ?? 90);
   const iteration = Math.floor(state.iteration ?? 0);
   const max = Math.floor(state.max ?? 4);
+  const rawScoreValue = state.score;
+  const rawScore = Number(rawScoreValue);
+
+  if (rawScoreValue === null || rawScoreValue === undefined || rawScoreValue === "" || !Number.isFinite(rawScore)) {
+    const repairAttempts = Math.floor(Number(state.eval_repair_attempts ?? 0));
+    if (repairAttempts >= 2) {
+      state.active = false;
+      state.phase = "invalid_eval_output";
+      state.ended_reason = "invalid_eval_output";
+      state.ended_at = new Date().toISOString();
+      try {
+        writeFileSync(loop.statePath, JSON.stringify(state, null, 2));
+      } catch {
+        /* hook safety */
+      }
+      out({});
+      return;
+    }
+
+    state.eval_repair_attempts = repairAttempts + 1;
+    state.updated_at = new Date().toISOString();
+    try {
+      writeFileSync(loop.statePath, JSON.stringify(state, null, 2));
+    } catch {
+      /* 書けない場合も block 自体は返す */
+    }
+    const stateDir = loop.statePath.replace(/[/\\]state\.json$/, "");
+    const invalidFile = join(stateDir, "turns", `turn-${String(iteration).padStart(3, "0")}-invalid-eval.json`);
+    const reason =
+      `[fable-loop ${loop.loopId} iteration ${iteration}/${max} | INVALID EVAL OUTPUT]\n` +
+      `採点フェーズは完了しましたが score が有効な整数ではありません。\n` +
+      `1. ${invalidFile} があれば内容を確認する\n` +
+      `2. fable_review をもう一度呼んで、必ず <eval>{\"score\": 0-100, ...}</eval> を返させる\n` +
+      `3. .fable-loop/ 配下は直接編集しない。修復が2回失敗したらループは invalid_eval_output で終了します。`;
+    out({ decision: "block", reason });
+    return;
+  }
+
+  const score = Math.max(0, Math.min(100, Math.floor(rawScore)));
 
   // 出口1: 合格、または周回上限 → ループを閉じて静かに終了
   if (score >= threshold || iteration >= max) {
@@ -109,6 +153,7 @@ process.stdin.on("end", () => {
     return;
   }
   state.last_blocked_iteration = iteration;
+  state.phase = "implementing";
   state.updated_at = new Date().toISOString();
   try {
     writeFileSync(loop.statePath, JSON.stringify(state, null, 2));
