@@ -3644,49 +3644,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative, options, skipNormalization) {
+    function resolveComponent(base, relative2, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse3(serialize(base, options), options);
-        relative = parse3(serialize(relative, options), options);
+        relative2 = parse3(serialize(relative2, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative.scheme) {
-        target.scheme = relative.scheme;
-        target.userinfo = relative.userinfo;
-        target.host = relative.host;
-        target.port = relative.port;
-        target.path = removeDotSegments(relative.path || "");
-        target.query = relative.query;
+      if (!options.tolerant && relative2.scheme) {
+        target.scheme = relative2.scheme;
+        target.userinfo = relative2.userinfo;
+        target.host = relative2.host;
+        target.port = relative2.port;
+        target.path = removeDotSegments(relative2.path || "");
+        target.query = relative2.query;
       } else {
-        if (relative.userinfo !== void 0 || relative.host !== void 0 || relative.port !== void 0) {
-          target.userinfo = relative.userinfo;
-          target.host = relative.host;
-          target.port = relative.port;
-          target.path = removeDotSegments(relative.path || "");
-          target.query = relative.query;
+        if (relative2.userinfo !== void 0 || relative2.host !== void 0 || relative2.port !== void 0) {
+          target.userinfo = relative2.userinfo;
+          target.host = relative2.host;
+          target.port = relative2.port;
+          target.path = removeDotSegments(relative2.path || "");
+          target.query = relative2.query;
         } else {
-          if (!relative.path) {
+          if (!relative2.path) {
             target.path = base.path;
-            if (relative.query !== void 0) {
-              target.query = relative.query;
+            if (relative2.query !== void 0) {
+              target.query = relative2.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative.path[0] === "/") {
-              target.path = removeDotSegments(relative.path);
+            if (relative2.path[0] === "/") {
+              target.path = removeDotSegments(relative2.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative.path;
+                target.path = "/" + relative2.path;
               } else if (!base.path) {
-                target.path = relative.path;
+                target.path = relative2.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative2.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative.query;
+            target.query = relative2.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3694,7 +3694,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative.fragment;
+      target.fragment = relative2.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -6887,8 +6887,10 @@ var require_dist = __commonJS({
 
 // server.mjs
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // node_modules/zod/v3/external.js
@@ -21107,7 +21109,7 @@ var StdioServerTransport = class {
 };
 
 // server.mjs
-var VERSION = "0.6.2";
+var VERSION = "0.7.0";
 var MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 var TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1e3);
 var MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60);
@@ -21240,6 +21242,11 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
         resultEvent = ev;
         return;
       }
+      if (String(ev.type || "").includes("rate_limit")) {
+        const retry = ev.retry_after_ms != null ? ` retry_after=${Math.round(Number(ev.retry_after_ms) / 1e3)}s` : ev.retry_after != null ? ` retry_after=${ev.retry_after}` : "";
+        emitProgress(`\u30EC\u30FC\u30C8\u5236\u9650\u4E2D${retry}`.trim());
+        return;
+      }
       if (ev.type === "assistant") {
         for (const c of ev.message?.content || []) {
           if (c.type === "tool_use") {
@@ -21288,7 +21295,8 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
         return;
       }
       if (resultEvent && typeof resultEvent.result === "string") {
-        const cost = typeof resultEvent.total_cost_usd === "number" ? `$${resultEvent.total_cost_usd.toFixed(2)}` : "n/a";
+        const costUsd = typeof resultEvent.total_cost_usd === "number" ? resultEvent.total_cost_usd : null;
+        const cost = typeof costUsd === "number" ? `$${costUsd.toFixed(2)}` : "n/a";
         const turns = resultEvent.num_turns != null ? `${resultEvent.num_turns} turns` : "";
         const capNote = resultEvent.subtype === "error_max_turns" ? `
 
@@ -21302,7 +21310,9 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
           text: resultEvent.result + footer,
           rawText: resultEvent.result,
           sessionId: resultEvent.session_id || "",
-          effort: effortLevel || "default(high)"
+          effort: effortLevel || "default(high)",
+          costUsd,
+          turns: resultEvent.num_turns ?? null
         });
         return;
       }
@@ -21350,26 +21360,105 @@ function saveLastPlan(cwd, { planText, task, sessionId, effort }) {
     )
   );
 }
-function loopDir(cwd) {
+var LOOP_SCHEMA_VERSION = 2;
+var LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
+function loopRoot(cwd) {
   return join(cwd, ".fable-loop");
 }
-function readLoopState(cwd) {
+function loopSessionsDir(cwd) {
+  return join(loopRoot(cwd), "sessions");
+}
+function makeLoopId() {
+  return `loop-${(/* @__PURE__ */ new Date()).toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomUUID().slice(0, 8)}`;
+}
+function assertLoopId(loopId) {
+  if (!LOOP_ID_RE.test(String(loopId || "")) || String(loopId).includes("..")) {
+    throw new Error(`Invalid loop_id: ${loopId}`);
+  }
+}
+function readCurrentLoopId(cwd) {
+  const current = safeReadJson(join(loopRoot(cwd), "current.json"));
+  if (current?.loop_id && LOOP_ID_RE.test(current.loop_id)) return current.loop_id;
+  return "";
+}
+function writeCurrentLoopId(cwd, loopId) {
+  mkdirSync(loopRoot(cwd), { recursive: true });
+  writeFileSync(join(loopRoot(cwd), "current.json"), JSON.stringify({ loop_id: loopId, updated_at: (/* @__PURE__ */ new Date()).toISOString() }, null, 2));
+}
+function legacyLoopRef(cwd) {
+  return {
+    loopId: "legacy",
+    legacy: true,
+    dir: loopRoot(cwd),
+    statePath: join(loopRoot(cwd), "state.json"),
+    turnsDir: join(loopRoot(cwd), "turns")
+  };
+}
+function sessionLoopRef(cwd, loopId) {
+  assertLoopId(loopId);
+  const dir = join(loopSessionsDir(cwd), loopId);
+  return {
+    loopId,
+    legacy: false,
+    dir,
+    statePath: join(dir, "state.json"),
+    turnsDir: join(dir, "turns")
+  };
+}
+function resolveLoopRef(cwd, loopId) {
+  if (loopId) return sessionLoopRef(cwd, loopId);
+  const currentId = readCurrentLoopId(cwd);
+  if (currentId) {
+    const current = sessionLoopRef(cwd, currentId);
+    if (existsSync(current.statePath)) return current;
+  }
+  const legacy = legacyLoopRef(cwd);
+  if (existsSync(legacy.statePath)) return legacy;
+  return null;
+}
+function listLoopRefs(cwd) {
+  const refs = [];
   try {
-    return JSON.parse(readFileSync(join(loopDir(cwd), "state.json"), "utf8"));
+    for (const entry of readdirSync(loopSessionsDir(cwd), { withFileTypes: true })) {
+      if (entry.isDirectory() && LOOP_ID_RE.test(entry.name)) refs.push(sessionLoopRef(cwd, entry.name));
+    }
+  } catch {
+  }
+  const legacy = legacyLoopRef(cwd);
+  if (existsSync(legacy.statePath)) refs.push(legacy);
+  const seen = /* @__PURE__ */ new Set();
+  return refs.filter((ref) => {
+    const key = ref.legacy ? "legacy" : ref.loopId;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function readLoop(cwd, loopId) {
+  const ref = resolveLoopRef(cwd, loopId);
+  if (!ref || !existsSync(ref.statePath)) return null;
+  try {
+    return { ...ref, state: JSON.parse(readFileSync(ref.statePath, "utf8")) };
   } catch {
     return null;
   }
 }
-function writeLoopState(cwd, state) {
+function writeLoopState(loop, state) {
   state.updated_at = (/* @__PURE__ */ new Date()).toISOString();
-  writeFileSync(join(loopDir(cwd), "state.json"), JSON.stringify(state, null, 2));
+  writeFileSync(loop.statePath, JSON.stringify(state, null, 2));
 }
-function initLoop(cwd, task, criteriaText, threshold, max) {
-  mkdirSync(join(loopDir(cwd), "turns"), { recursive: true });
-  writeFileSync(join(loopDir(cwd), "task.md"), task);
-  writeFileSync(join(loopDir(cwd), "criteria.md"), criteriaText);
-  writeLoopState(cwd, {
-    active: true,
+function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", effort = "", costUsd = null, autoApprove = false } = {}) {
+  const loopId = makeLoopId();
+  const loop = sessionLoopRef(cwd, loopId);
+  mkdirSync(loop.turnsDir, { recursive: true });
+  writeFileSync(join(loop.dir, "task.md"), task);
+  writeFileSync(join(loop.dir, "criteria.md"), criteriaText);
+  writeLoopState(loop, {
+    schema_version: LOOP_SCHEMA_VERSION,
+    loop_id: loopId,
+    active: Boolean(autoApprove),
+    criteria_approved: Boolean(autoApprove),
+    phase: autoApprove ? "active" : "awaiting_criteria_approval",
     iteration: 0,
     score: 0,
     passed: false,
@@ -21377,16 +21466,230 @@ function initLoop(cwd, task, criteriaText, threshold, max) {
     max,
     best_score: 0,
     best_iteration: -1,
+    best_snapshot_ref: "",
+    last_snapshot_ref: "",
     last_blocked_iteration: -1,
+    cumulative_cost_usd: typeof costUsd === "number" ? costUsd : 0,
+    last_cost_usd: typeof costUsd === "number" ? costUsd : 0,
+    fable_session_id: sessionId || "",
+    effort: effort || "",
+    snapshot_enabled: isGitRepo(cwd),
+    snapshot_status: isGitRepo(cwd) ? "ready" : "disabled: not a git repository",
+    write_targets: [],
+    ended_reason: "",
     started_at: (/* @__PURE__ */ new Date()).toISOString()
   });
+  writeCurrentLoopId(cwd, loopId);
+  return loop;
 }
-function safeReadLoopFile(cwd, name) {
+function safeReadLoopFile(loop, name) {
   try {
-    return readFileSync(join(loopDir(cwd), name), "utf8");
+    return readFileSync(join(loop.dir, name), "utf8");
   } catch {
     return "";
   }
+}
+function runGit(cwd, args, options = {}) {
+  return spawnSync("git", args, {
+    cwd,
+    env: { ...process.env, ...options.env || {} },
+    input: options.input,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: options.timeout ?? 15e3
+  });
+}
+function isGitRepo(cwd) {
+  const res = runGit(cwd, ["rev-parse", "--is-inside-work-tree"], { timeout: 5e3 });
+  return res.status === 0 && String(res.stdout).trim() === "true";
+}
+function hasHead(cwd) {
+  return runGit(cwd, ["rev-parse", "--verify", "HEAD"], { timeout: 5e3 }).status === 0;
+}
+function normalizeRepoPath(path) {
+  return String(path || "").replaceAll("\\", "/").replace(/^\/+/, "");
+}
+function isStatePath(path) {
+  const p = normalizeRepoPath(path);
+  return p === ".fable-loop" || p.startsWith(".fable-loop/") || p === ".fable" || p.startsWith(".fable/");
+}
+function listChangedPaths(cwd) {
+  if (!isGitRepo(cwd)) return [];
+  const res = runGit(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], { timeout: 15e3 });
+  if (res.status !== 0) return [];
+  const parts = res.stdout.split("\0").filter(Boolean);
+  const paths = [];
+  for (let i = 0; i < parts.length; i++) {
+    const item = parts[i];
+    const status = item.slice(0, 2);
+    let path = item.slice(3);
+    if (status.includes("R") || status.includes("C")) {
+      const next = parts[i + 1];
+      if (next) {
+        path = next;
+        i++;
+      }
+    }
+    path = normalizeRepoPath(path);
+    if (path && !isStatePath(path)) paths.push(path);
+  }
+  return [...new Set(paths)].sort();
+}
+function mergeWriteTargets(state, paths) {
+  const merged = new Set(Array.isArray(state.write_targets) ? state.write_targets.map(normalizeRepoPath) : []);
+  for (const path of paths) {
+    const normalized = normalizeRepoPath(path);
+    if (normalized && !isStatePath(normalized)) merged.add(normalized);
+  }
+  state.write_targets = [...merged].sort();
+}
+function updateLoopCost(state, res) {
+  if (typeof res?.costUsd !== "number") return;
+  state.last_cost_usd = res.costUsd;
+  state.cumulative_cost_usd = Number((Number(state.cumulative_cost_usd || 0) + res.costUsd).toFixed(6));
+}
+function snapshotRef(loopId, name) {
+  assertLoopId(loopId);
+  return `refs/fable-loop/${loopId}/${name}`;
+}
+function createLoopSnapshot(cwd, loop, state, iteration, score) {
+  if (!state.snapshot_enabled || loop.legacy || !isGitRepo(cwd)) {
+    state.snapshot_status = state.snapshot_status || "disabled";
+    return null;
+  }
+  const gitIndexFile = join(mkdtempSync(join(tmpdir(), "fable-loop-index-")), "index");
+  try {
+    const env = {
+      GIT_INDEX_FILE: gitIndexFile,
+      GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || "fable-mcp",
+      GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL || "fable-mcp@example.invalid",
+      GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || "fable-mcp",
+      GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || "fable-mcp@example.invalid"
+    };
+    const parentArgs = [];
+    if (hasHead(cwd)) {
+      const readTree = runGit(cwd, ["read-tree", "HEAD"], { env });
+      if (readTree.status !== 0) throw new Error(readTree.stderr || "git read-tree failed");
+      const head = runGit(cwd, ["rev-parse", "HEAD"], { timeout: 5e3 });
+      if (head.status === 0) parentArgs.push("-p", head.stdout.trim());
+    } else {
+      const readTree = runGit(cwd, ["read-tree", "--empty"], { env });
+      if (readTree.status !== 0) throw new Error(readTree.stderr || "git read-tree --empty failed");
+    }
+    const add = runGit(cwd, ["add", "-A", "--", "."], { env, timeout: 3e4 });
+    if (add.status !== 0) throw new Error(add.stderr || "git add failed");
+    runGit(cwd, ["rm", "-r", "--cached", "--ignore-unmatch", ".fable-loop", ".fable"], { env, timeout: 15e3 });
+    const tree = runGit(cwd, ["write-tree"], { env });
+    if (tree.status !== 0) throw new Error(tree.stderr || "git write-tree failed");
+    const msg = `fable-loop ${loop.loopId} iteration ${iteration} score ${score}`;
+    const commit = runGit(cwd, ["commit-tree", tree.stdout.trim(), ...parentArgs], { env, input: `${msg}
+`, timeout: 15e3 });
+    if (commit.status !== 0) throw new Error(commit.stderr || "git commit-tree failed");
+    const commitId = commit.stdout.trim();
+    const iterRef = snapshotRef(loop.loopId, `iter-${String(iteration).padStart(3, "0")}`);
+    const update = runGit(cwd, ["update-ref", iterRef, commitId], { timeout: 15e3 });
+    if (update.status !== 0) throw new Error(update.stderr || "git update-ref failed");
+    state.last_snapshot_ref = iterRef;
+    state.snapshot_status = "ok";
+    return iterRef;
+  } catch (e) {
+    state.snapshot_status = `failed: ${e.message}`;
+    return null;
+  } finally {
+    try {
+      rmSync(dirname(gitIndexFile), { recursive: true, force: true });
+    } catch {
+    }
+  }
+}
+function markBestSnapshot(cwd, loop, state, iterRef) {
+  if (!iterRef || loop.legacy || !isGitRepo(cwd)) return;
+  const bestRef = snapshotRef(loop.loopId, "best");
+  const commit = runGit(cwd, ["rev-parse", iterRef], { timeout: 5e3 });
+  if (commit.status !== 0) {
+    state.snapshot_status = `failed: ${commit.stderr || "snapshot ref missing"}`;
+    return;
+  }
+  const update = runGit(cwd, ["update-ref", bestRef, commit.stdout.trim()], { timeout: 15e3 });
+  if (update.status === 0) {
+    state.best_snapshot_ref = bestRef;
+  } else {
+    state.snapshot_status = `failed: ${update.stderr || "best ref update failed"}`;
+  }
+}
+function gitPathExistsAtRef(cwd, ref, path) {
+  return runGit(cwd, ["cat-file", "-e", `${ref}:${path}`], { timeout: 5e3 }).status === 0;
+}
+function removeRepoPath(cwd, path) {
+  const target = join(cwd, path);
+  const rel = relative(cwd, target);
+  if (!rel || rel.startsWith("..") || rel === "." || isStatePath(rel)) {
+    throw new Error(`Refusing to remove unsafe path: ${path}`);
+  }
+  rmSync(target, { recursive: true, force: true });
+}
+function restoreBestSnapshot(cwd, loop, state, paths = []) {
+  const ref = state.best_snapshot_ref;
+  if (!ref) throw new Error("No best snapshot ref is recorded for this loop.");
+  if (!isGitRepo(cwd)) throw new Error("Best snapshot restore requires a git repository.");
+  const selected = paths.length ? paths.map(normalizeRepoPath) : Array.isArray(state.write_targets) ? state.write_targets.map(normalizeRepoPath) : [];
+  const safePaths = [...new Set(selected.filter((path) => path && !isStatePath(path)))].sort();
+  if (safePaths.length === 0) {
+    throw new Error("No write_targets are recorded. Pass explicit paths to restore.");
+  }
+  const restored = [];
+  const removed = [];
+  for (const path of safePaths) {
+    if (gitPathExistsAtRef(cwd, ref, path)) {
+      const co = runGit(cwd, ["checkout", ref, "--", path], { timeout: 3e4 });
+      if (co.status !== 0) throw new Error(co.stderr || `git checkout failed for ${path}`);
+      restored.push(path);
+    } else {
+      removeRepoPath(cwd, path);
+      removed.push(path);
+    }
+  }
+  return { restored, removed, ref };
+}
+function parseEval(text) {
+  const m = [...String(text || "").matchAll(/<eval>([\s\S]*?)<\/eval>/g)].pop();
+  if (!m) return null;
+  try {
+    const ev = JSON.parse(m[1].trim());
+    const score = Number(ev.score);
+    if (!Number.isFinite(score)) return null;
+    return {
+      score: Math.max(0, Math.min(100, Math.floor(score))),
+      breakdown: ev.breakdown && typeof ev.breakdown === "object" ? ev.breakdown : {},
+      feedback: String(ev.feedback || "")
+    };
+  } catch {
+    return null;
+  }
+}
+function aggregateEvals(evals) {
+  const valid = evals.filter(Boolean);
+  if (valid.length === 0) return null;
+  if (valid.length === 1) return valid[0];
+  const scores = valid.map((ev) => ev.score).sort((a, b) => a - b);
+  const median = scores[Math.floor(scores.length / 2)];
+  const keys = /* @__PURE__ */ new Set();
+  for (const ev of valid) {
+    for (const key of Object.keys(ev.breakdown || {})) keys.add(key);
+  }
+  const breakdown = {};
+  for (const key of keys) {
+    const nums = valid.map((ev) => Number(ev.breakdown?.[key])).filter(Number.isFinite);
+    if (nums.length) breakdown[key] = Math.round(nums.reduce((a, b) => a + b, 0) / nums.length);
+  }
+  return {
+    score: median,
+    breakdown,
+    feedback: valid.map((ev, idx) => `Evaluator ${idx + 1} (score ${ev.score}):
+${ev.feedback}`).join("\n\n"),
+    ensemble_size: valid.length,
+    raw_scores: valid.map((ev) => ev.score)
+  };
 }
 function makeProgressReporter(extra) {
   const progressToken = extra?._meta?.progressToken;
@@ -21456,26 +21759,99 @@ function safeReadJson(path) {
     return null;
   }
 }
+function safeReadText(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+}
+function codexConfigSnapshot() {
+  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+  const configPath = join(codexHome, "config.toml");
+  const hooksPath = join(codexHome, "hooks.json");
+  const agentsPath = join(codexHome, "AGENTS.md");
+  const config2 = safeReadText(configPath);
+  const hooks = safeReadText(hooksPath);
+  const agents = safeReadText(agentsPath);
+  return {
+    codexHome,
+    configPath,
+    hooksPath,
+    agentsPath,
+    manualMcpConfig: /^\s*\[mcp_servers\.fable\]\s*$/m.test(config2),
+    pluginEnvTable: /^\s*\[plugins\."fable-mcp@fable-mcp"\.mcp_servers\.fable\.env\]\s*$/m.test(config2),
+    manualHookConfig: hooks.includes("fable-loop-stop.mjs"),
+    globalAgentFableRules: /Fable 5 Orchestration|Fable 5 オーケストレーション|fable_plan|fable_review/.test(agents)
+  };
+}
+function codexConfigLines(snapshot) {
+  const duplicateRisk = snapshot.manualMcpConfig || snapshot.manualHookConfig || snapshot.globalAgentFableRules;
+  return [
+    `- CODEX_HOME: ${snapshot.codexHome}`,
+    `- manual [mcp_servers.fable]: ${snapshot.manualMcpConfig ? "found" : "not found"}`,
+    `- plugin env table: ${snapshot.pluginEnvTable ? "found" : "not found"}`,
+    `- manual hooks.json fable-loop-stop: ${snapshot.manualHookConfig ? "found" : "not found"}`,
+    `- global AGENTS Fable rules: ${snapshot.globalAgentFableRules ? "found" : "not found"}`,
+    `- duplicate-registration risk: ${duplicateRisk ? "attention" : "none detected"}`
+  ];
+}
 function readLoopSnapshot(cwd) {
-  const statePath = join(loopDir(cwd), "state.json");
-  if (!existsSync(statePath)) return { exists: false, statePath };
-  const state = safeReadJson(statePath);
-  if (!state) return { exists: true, valid: false, statePath };
-  const threshold = Math.floor(state.threshold ?? 90);
-  const iteration = Math.floor(state.iteration ?? 0);
-  const max = Number.isFinite(Number(state.max)) ? Math.floor(Number(state.max)) : "unknown";
-  const score = Number.isFinite(Number(state.score)) ? Math.floor(Number(state.score)) : "unknown";
-  const active = Boolean(state.active);
-  const passed = Boolean(state.passed) || Number.isFinite(Number(score)) && score >= threshold;
-  return { exists: true, valid: true, statePath, threshold, iteration, max, score, active, passed };
+  const refs = listLoopRefs(cwd);
+  if (refs.length === 0) return { exists: false, root: loopRoot(cwd), loops: [] };
+  const currentId = readCurrentLoopId(cwd);
+  const loops = refs.map((ref) => {
+    const state = safeReadJson(ref.statePath);
+    if (!state) return { exists: true, valid: false, loopId: ref.loopId, statePath: ref.statePath, legacy: ref.legacy };
+    const threshold = Math.floor(state.threshold ?? 90);
+    const iteration = Math.floor(state.iteration ?? 0);
+    const max = Number.isFinite(Number(state.max)) ? Math.floor(Number(state.max)) : "unknown";
+    const score = Number.isFinite(Number(state.score)) ? Math.floor(Number(state.score)) : "unknown";
+    const active = Boolean(state.active);
+    const criteriaApproved = Boolean(state.criteria_approved ?? ref.legacy);
+    const passed = Boolean(state.passed) || Number.isFinite(Number(score)) && score >= threshold;
+    return {
+      exists: true,
+      valid: true,
+      loopId: state.loop_id || ref.loopId,
+      statePath: ref.statePath,
+      legacy: ref.legacy,
+      threshold,
+      iteration,
+      max,
+      score,
+      active,
+      criteriaApproved,
+      phase: state.phase || (active ? "active" : "inactive"),
+      passed,
+      endedReason: state.ended_reason || "",
+      bestScore: Number.isFinite(Number(state.best_score)) ? Math.floor(Number(state.best_score)) : 0,
+      bestIteration: Number.isFinite(Number(state.best_iteration)) ? Math.floor(Number(state.best_iteration)) : -1,
+      bestSnapshotRef: state.best_snapshot_ref || "",
+      cumulativeCostUsd: Number(state.cumulative_cost_usd || 0)
+    };
+  });
+  const current = loops.find((loop) => !loop.legacy && loop.loopId === currentId) || loops.find((loop) => loop.active) || loops[0];
+  return { exists: true, root: loopRoot(cwd), currentId, current, loops };
 }
 function loopStatusLines(loop) {
-  if (!loop.exists) return ["- quality loop: inactive (.fable-loop/state.json not found)"];
-  if (!loop.valid) return [`- quality loop: state exists but is not valid JSON (${loop.statePath})`];
-  return [
-    `- quality loop: ${loop.active ? "active" : "inactive"} | iteration ${loop.iteration}/${loop.max} | score ${loop.score}/${loop.threshold} | passed: ${loop.passed ? "yes" : "no"}`,
-    `- quality loop state: ${loop.statePath}`
-  ];
+  if (!loop.exists) return ["- quality loop: inactive (.fable-loop not found)"];
+  const lines = [`- quality loop root: ${loop.root}`];
+  for (const item of loop.loops) {
+    if (!item.valid) {
+      lines.push(`- ${item.loopId}: state exists but is not valid JSON (${item.statePath})`);
+      continue;
+    }
+    const marker = loop.current?.loopId === item.loopId ? "current, " : "";
+    const approval = item.criteriaApproved ? "approved" : "awaiting criteria approval";
+    const cost = item.cumulativeCostUsd ? ` | cumulative cost ~$${item.cumulativeCostUsd.toFixed(4)}` : "";
+    const best = item.bestIteration >= 0 ? ` | best ${item.bestScore}/100 at iteration ${item.bestIteration + 1}${item.bestSnapshotRef ? " (snapshot ready)" : ""}` : "";
+    lines.push(
+      `- ${item.loopId}: ${marker}${item.active ? "active" : "inactive"} | ${approval} | iteration ${item.iteration}/${item.max} | score ${item.score}/${item.threshold} | passed: ${item.passed ? "yes" : "no"}${best}${cost}`
+    );
+    lines.push(`  state: ${item.statePath}`);
+  }
+  return lines;
 }
 function nextActionLines({ claude, hasApiKey, effort, timeoutValid, maxTurnsValid, lastPlanExists, loop }) {
   const actions = [];
@@ -21493,19 +21869,22 @@ function nextActionLines({ claude, hasApiKey, effort, timeoutValid, maxTurnsVali
   if (effort === "xhigh" || effort === "max") {
     actions.push(`${actions.length + 1}. Cost check: FABLE_EFFORT=${effort}. Prefer per-call max/xhigh only when the user explicitly asks for deep reasoning.`);
   }
-  if (loop.exists && !loop.valid) {
-    actions.push(`${actions.length + 1}. Inspect ${loop.statePath}; the quality-loop state JSON is invalid.`);
-  } else if (loop.valid && loop.active && !loop.passed) {
-    actions.push(`${actions.length + 1}. Quality loop is active. Implement the latest feedback, then call \`fable_review\` again.`);
-  } else if (loop.valid && loop.active && loop.passed) {
-    actions.push(`${actions.length + 1}. Quality loop has passed. Finish by summarizing the result or committing the verified changes.`);
+  const currentLoop = loop.current;
+  if (loop.exists && currentLoop && !currentLoop.valid) {
+    actions.push(`${actions.length + 1}. Inspect ${currentLoop.statePath}; the quality-loop state JSON is invalid.`);
+  } else if (currentLoop?.valid && !currentLoop.criteriaApproved) {
+    actions.push(`${actions.length + 1}. Review the criteria in the loop state, then call \`fable_loop_approve\` if the user accepts them.`);
+  } else if (currentLoop?.valid && currentLoop.active && !currentLoop.passed) {
+    actions.push(`${actions.length + 1}. Quality loop ${currentLoop.loopId} is active. Implement the latest feedback, then call \`fable_review\` again.`);
+  } else if (currentLoop?.valid && currentLoop.active && currentLoop.passed) {
+    actions.push(`${actions.length + 1}. Quality loop ${currentLoop.loopId} has passed. Finish by summarizing the result or committing the verified changes.`);
   }
   if (actions.length === 0) {
     actions.push("1. Setup looks ready. Try: `Fable5\u306B\u805E\u3044\u3066: \u3053\u306E\u30EA\u30DD\u30B8\u30C8\u30EA\u306F\u4F55\u3092\u3059\u308B\u3082\u306E?`");
     actions.push("2. For implementation work, enter Codex Plan mode or ask: `Fable\u3067\u30D7\u30E9\u30F3\u4F5C\u3063\u3066`.");
-  } else if (claude.ok && hasApiKey && !lastPlanExists && !(loop.valid && loop.active)) {
+  } else if (claude.ok && hasApiKey && !lastPlanExists && !(currentLoop?.valid && currentLoop.active)) {
     actions.push(`${actions.length + 1}. After the setup warning is resolved, try: \`Fable5\u306B\u805E\u3044\u3066: \u3053\u306E\u30EA\u30DD\u30B8\u30C8\u30EA\u306F\u4F55\u3092\u3059\u308B\u3082\u306E?\``);
-  } else if (lastPlanExists && !(loop.valid && loop.active && !loop.passed)) {
+  } else if (lastPlanExists && !(currentLoop?.valid && currentLoop.active && !currentLoop.passed)) {
     actions.push(`${actions.length + 1}. A saved Fable plan exists. Read \`.fable/last-plan.md\`, implement it, then call \`fable_review\`.`);
   }
   return actions;
@@ -21526,6 +21905,16 @@ function statusText(cwd) {
   const lastPlan = join(fableDir(projectCwd), "last-plan.md");
   const lastPlanExists = existsSync(lastPlan);
   const loop = readLoopSnapshot(projectCwd);
+  const codexConfig = codexConfigSnapshot();
+  if (runtimeMode().includes("plugin") && codexConfig.manualMcpConfig) {
+    warnings.push(`Manual [mcp_servers.fable] is still present in ${codexConfig.configPath}. Remove it when using the Codex plugin to avoid double registration.`);
+  }
+  if (runtimeMode().includes("plugin") && codexConfig.manualHookConfig) {
+    warnings.push(`Manual fable-loop Stop hook is still present in ${codexConfig.hooksPath}. Remove it when using the Codex plugin to avoid double hook execution.`);
+  }
+  if (runtimeMode().includes("plugin") && codexConfig.globalAgentFableRules) {
+    warnings.push(`Global AGENTS.md contains Fable orchestration rules. Prefer the plugin-bundled rules to avoid stale or duplicated routing.`);
+  }
   const authMode = hasApiKey ? "ANTHROPIC_API_KEY present: Anthropic API metered billing" : "no ANTHROPIC_API_KEY: claude CLI login/session, if available";
   return [
     "# fable-mcp status",
@@ -21546,6 +21935,9 @@ function statusText(cwd) {
     `- default effort: ${effort}`,
     `- max turns per call: ${MAX_TURNS > 0 ? MAX_TURNS : "unlimited"}`,
     `- timeout per call: ${formatDuration(TIMEOUT_MS)}`,
+    "",
+    "## Codex Registration",
+    ...codexConfigLines(codexConfig),
     "",
     "## Project Files",
     `- last verbatim Fable plan: ${lastPlanExists ? lastPlan : "not found yet (.fable/last-plan.md will be created by fable_plan)"}`,
@@ -21575,6 +21967,87 @@ server.tool(
   async ({ cwd }) => toToolResult({ isError: false, text: statusText(cwd) })
 );
 server.tool(
+  "fable_loop_approve",
+  "\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u53D7\u3051\u5165\u308C\u57FA\u6E96\u3092\u30E6\u30FC\u30B6\u30FC\u304C\u627F\u8A8D\u3057\u305F\u5F8C\u306B\u547C\u3076\u3002\u627F\u8A8D\u5F85\u3061\u306E loop_id \u3092 active \u306B\u3057\u3001\u4EE5\u5F8C fable_review \u3068 Stop hook \u304C\u30EB\u30FC\u30D7\u3092\u9032\u3081\u308B\u3002Fable \u672C\u4F53\u306F\u547C\u3070\u306A\u3044\u305F\u3081 API \u30B3\u30B9\u30C8\u306F\u767A\u751F\u3057\u306A\u3044\u3002",
+  {
+    cwd: external_exports.string().describe("\u5BFE\u8C61\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u306E\u30EB\u30FC\u30C8\u7D76\u5BFE\u30D1\u30B9\u3002"),
+    loop_id: external_exports.string().optional().describe("\u627F\u8A8D\u3059\u308B loop_id\u3002\u7701\u7565\u6642\u306F\u73FE\u5728\u30EB\u30FC\u30D7\u3002")
+  },
+  async ({ cwd, loop_id }) => {
+    const loop = readLoop(cwd, loop_id);
+    if (!loop) {
+      return toToolResult({ isError: true, text: "\u627F\u8A8D\u5BFE\u8C61\u306E\u54C1\u8CEA\u30EB\u30FC\u30D7\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002\u5148\u306B fable_plan with loop_threshold \u3092\u547C\u3093\u3067\u304F\u3060\u3055\u3044\u3002" });
+    }
+    const state = loop.state;
+    state.criteria_approved = true;
+    state.active = true;
+    state.phase = "active";
+    state.ended_reason = "";
+    state.approved_at = (/* @__PURE__ */ new Date()).toISOString();
+    writeLoopState(loop, state);
+    if (!loop.legacy) writeCurrentLoopId(cwd, loop.loopId);
+    return toToolResult({
+      isError: false,
+      text: `\u54C1\u8CEA\u30EB\u30FC\u30D7 ${loop.loopId} \u306E\u53D7\u3051\u5165\u308C\u57FA\u6E96\u3092\u627F\u8A8D\u3057\u3001active \u306B\u3057\u307E\u3057\u305F\u3002
+\u6B21\u306E\u624B\u9806: \u5B9F\u88C5\u3092\u9032\u3081\u3001\u5B8C\u4E86\u5F8C\u306B fable_review \u3092\u547C\u3093\u3067\u63A1\u70B9\u3057\u3066\u304F\u3060\u3055\u3044\u3002`
+    });
+  }
+);
+server.tool(
+  "fable_loop_abort",
+  "\u54C1\u8CEA\u30EB\u30FC\u30D7\u3092\u5B89\u5168\u306B\u4E2D\u65AD\u3059\u308B\u3002state.json \u3092\u76F4\u63A5\u7DE8\u96C6\u305B\u305A\u3001active=false \u3068 ended_reason \u3092\u6A5F\u68B0\u7684\u306B\u8A18\u9332\u3059\u308B\u3002Fable \u672C\u4F53\u306F\u547C\u3070\u306A\u3044\u305F\u3081 API \u30B3\u30B9\u30C8\u306F\u767A\u751F\u3057\u306A\u3044\u3002",
+  {
+    cwd: external_exports.string().describe("\u5BFE\u8C61\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u306E\u30EB\u30FC\u30C8\u7D76\u5BFE\u30D1\u30B9\u3002"),
+    loop_id: external_exports.string().optional().describe("\u4E2D\u65AD\u3059\u308B loop_id\u3002\u7701\u7565\u6642\u306F\u73FE\u5728\u30EB\u30FC\u30D7\u3002"),
+    reason: external_exports.string().optional().describe("\u4E2D\u65AD\u7406\u7531\u3002\u7701\u7565\u6642\u306F user_aborted\u3002")
+  },
+  async ({ cwd, loop_id, reason }) => {
+    const loop = readLoop(cwd, loop_id);
+    if (!loop) return toToolResult({ isError: true, text: "\u4E2D\u65AD\u5BFE\u8C61\u306E\u54C1\u8CEA\u30EB\u30FC\u30D7\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002" });
+    const state = loop.state;
+    state.active = false;
+    state.phase = "aborted";
+    state.ended_reason = reason || "user_aborted";
+    state.aborted_at = (/* @__PURE__ */ new Date()).toISOString();
+    writeLoopState(loop, state);
+    return toToolResult({
+      isError: false,
+      text: `\u54C1\u8CEA\u30EB\u30FC\u30D7 ${loop.loopId} \u3092\u4E2D\u65AD\u3057\u307E\u3057\u305F (reason: ${state.ended_reason})\u3002
+` + (state.best_snapshot_ref ? `best snapshot \u306F\u4FDD\u6301\u3055\u308C\u3066\u3044\u307E\u3059: ${state.best_snapshot_ref}
+\u5FC5\u8981\u306A\u3089 fable_loop_restore_best \u3067\u5FA9\u5143\u3067\u304D\u307E\u3059\u3002` : "best snapshot \u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093\u3002")
+    });
+  }
+);
+server.tool(
+  "fable_loop_restore_best",
+  "\u54C1\u8CEA\u30EB\u30FC\u30D7\u3067\u8A18\u9332\u3055\u308C\u305F best snapshot \u3092\u4F5C\u696D\u30C4\u30EA\u30FC\u3078\u5FA9\u5143\u3059\u308B\u3002\u5FA9\u5143\u5BFE\u8C61\u306F write_targets \u307E\u305F\u306F\u660E\u793A paths \u306B\u9650\u5B9A\u3057\u3001.fable-loop/.fable \u306F\u89E6\u3089\u306A\u3044\u3002Fable \u672C\u4F53\u306F\u547C\u3070\u306A\u3044\u305F\u3081 API \u30B3\u30B9\u30C8\u306F\u767A\u751F\u3057\u306A\u3044\u3002",
+  {
+    cwd: external_exports.string().describe("\u5BFE\u8C61\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u306E\u30EB\u30FC\u30C8\u7D76\u5BFE\u30D1\u30B9\u3002"),
+    loop_id: external_exports.string().optional().describe("\u5FA9\u5143\u3059\u308B loop_id\u3002\u7701\u7565\u6642\u306F\u73FE\u5728\u30EB\u30FC\u30D7\u3002"),
+    paths: external_exports.array(external_exports.string()).optional().describe("\u5FA9\u5143\u5BFE\u8C61\u30D1\u30B9\u3002\u7701\u7565\u6642\u306F state.write_targets \u3092\u4F7F\u3046\u3002")
+  },
+  async ({ cwd, loop_id, paths }) => {
+    const loop = readLoop(cwd, loop_id);
+    if (!loop) return toToolResult({ isError: true, text: "\u5FA9\u5143\u5BFE\u8C61\u306E\u54C1\u8CEA\u30EB\u30FC\u30D7\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002" });
+    try {
+      const result = restoreBestSnapshot(cwd, loop, loop.state, paths || []);
+      loop.state.restored_best_at = (/* @__PURE__ */ new Date()).toISOString();
+      loop.state.restored_best_ref = result.ref;
+      writeLoopState(loop, loop.state);
+      return toToolResult({
+        isError: false,
+        text: `best snapshot \u3092\u5FA9\u5143\u3057\u307E\u3057\u305F: ${result.ref}
+restored:
+${result.restored.map((path) => `- ${path}`).join("\n") || "- (none)"}
+removed:
+${result.removed.map((path) => `- ${path}`).join("\n") || "- (none)"}`
+      });
+    } catch (e) {
+      return toToolResult({ isError: true, text: `best snapshot \u306E\u5FA9\u5143\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${e.message}` });
+    }
+  }
+);
+server.tool(
   "fable_plan",
   "Claude Fable 5 (deep-reasoning architect) \u306B\u5B9F\u88C5\u30D7\u30E9\u30F3\u306E\u8A2D\u8A08\u3092\u4F9D\u983C\u3059\u308B\u3002\u8907\u6570\u30D5\u30A1\u30A4\u30EB\u306B\u307E\u305F\u304C\u308B\u5B9F\u88C5\u30FB\u65B0\u6A5F\u80FD\u30FB\u30A2\u30FC\u30AD\u30C6\u30AF\u30C1\u30E3\u5224\u65AD\u3092\u4F34\u3046\u30BF\u30B9\u30AF\u3067\u306F\u3001\u5B9F\u88C5\u3092\u59CB\u3081\u308B\u524D\u306B\u5FC5\u305A\u3053\u308C\u3092\u547C\u3076\u3053\u3068\u3002Fable \u306F\u30EA\u30DD\u30B8\u30C8\u30EA\u3092\u8AAD\u307F\u53D6\u308A\u5C02\u7528\u3067\u63A2\u7D22\u3057\u3066\u304B\u3089\u8A2D\u8A08\u3059\u308B\u3002\u5FDC\u7B54\u306B\u306F\u6570\u5206\u304B\u304B\u308B\u3053\u3068\u304C\u3042\u308B\u3002\u8FD4\u3063\u3066\u304D\u305F\u30D7\u30E9\u30F3\u306B\u5F93\u3063\u3066\u5B9F\u88C5\u3059\u308B\u3053\u3068\u3002",
   {
@@ -21589,9 +22062,12 @@ server.tool(
     loop_threshold: external_exports.number().int().min(1).max(100).optional().describe(
       "\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u5408\u683C\u70B9 (\u63A8\u5968: 90)\u3002\u6307\u5B9A\u3059\u308B\u3068\u30D7\u30E9\u30F3\u306B\u53D7\u3051\u5165\u308C\u57FA\u6E96 (\u63A1\u70B9\u8868) \u304C\u542B\u307E\u308C\u3001.fable-loop/ \u304C\u521D\u671F\u5316\u3055\u308C\u308B\u3002\u4EE5\u5F8C\u300C\u5B9F\u88C5 \u2192 fable_review \u63A1\u70B9 \u2192 \u672A\u9054\u306A\u3089 Stop \u30D5\u30C3\u30AF\u304C\u5DEE\u3057\u623B\u3057\u300D\u306E\u81EA\u52D5\u30EB\u30FC\u30D7\u304C\u56DE\u308B\u3002\u30E6\u30FC\u30B6\u30FC\u304C\u300C\u5408\u683C\u307E\u3067\u56DE\u3057\u3066\u300D\u300C\u25EF\u70B9\u307E\u3067\u4ED5\u4E0A\u3052\u3066\u300D\u300C\u30EB\u30FC\u30D7\u3067\u300D\u7B49\u3068\u8A00\u3063\u305F\u3068\u304D\u306B\u6307\u5B9A\u3059\u308B\u3002"
     ),
-    loop_max_iterations: external_exports.number().int().min(1).max(20).optional().describe("\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u6700\u5927\u5468\u56DE\u6570 (\u30C7\u30D5\u30A9\u30EB\u30C8 4)\u3002\u7121\u9650\u30EB\u30FC\u30D7\u9632\u6B62\u306E\u30D6\u30EC\u30FC\u30AD\u3002")
+    loop_max_iterations: external_exports.number().int().min(1).max(20).optional().describe("\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u6700\u5927\u5468\u56DE\u6570 (\u30C7\u30D5\u30A9\u30EB\u30C8 4)\u3002\u7121\u9650\u30EB\u30FC\u30D7\u9632\u6B62\u306E\u30D6\u30EC\u30FC\u30AD\u3002"),
+    loop_auto_approve_criteria: external_exports.boolean().optional().describe(
+      "true \u306E\u5834\u5408\u3060\u3051\u3001Fable \u304C\u4F5C\u3063\u305F\u53D7\u3051\u5165\u308C\u57FA\u6E96\u3092\u4EBA\u9593\u627F\u8A8D\u306A\u3057\u3067\u5373\u30A2\u30AF\u30C6\u30A3\u30D6\u5316\u3059\u308B\u3002\u901A\u5E38\u306F\u7701\u7565\u3057\u3001fable_loop_approve \u3067\u660E\u793A\u627F\u8A8D\u3059\u308B\u3002"
+    )
   },
-  async ({ task, cwd, session_id, effort, loop_threshold, loop_max_iterations }, extra) => {
+  async ({ task, cwd, session_id, effort, loop_threshold, loop_max_iterations, loop_auto_approve_criteria }, extra) => {
     const threshold = loop_threshold != null ? Math.floor(loop_threshold) : null;
     const maxIter = Math.floor(loop_max_iterations ?? 4);
     const criteriaSection = threshold != null ? `
@@ -21639,9 +22115,14 @@ ${task}
       const m = [...res.text.matchAll(/<criteria>([\s\S]*?)<\/criteria>/g)].pop();
       const criteriaText = m ? m[1].trim() : res.text;
       try {
-        initLoop(cwd, task, criteriaText, threshold, maxIter);
+        const loop = initLoop(cwd, task, criteriaText, threshold, maxIter, {
+          sessionId: res.sessionId,
+          effort: res.effort,
+          costUsd: res.costUsd,
+          autoApprove: Boolean(loop_auto_approve_criteria)
+        });
         res.text += `
-[fable-loop] \u54C1\u8CEA\u30EB\u30FC\u30D7\u3092\u521D\u671F\u5316\u3057\u307E\u3057\u305F (\u5408\u683C\u70B9 ${threshold}/100, \u6700\u5927 ${maxIter} \u5468)\u3002\u72B6\u614B: ${join(cwd, ".fable-loop")}/ \u2014 \u5B9F\u88C5\u304C\u7D42\u308F\u3063\u305F\u3089 fable_review \u3092\u547C\u3076\u3053\u3068\u3002state.json / criteria.md / task.md \u306F\u76F4\u63A5\u7DE8\u96C6\u7981\u6B62 (\u63A1\u70B9\u306E\u6539\u7AC4\u306B\u5F53\u305F\u308B)\u3002`;
+[fable-loop] \u54C1\u8CEA\u30EB\u30FC\u30D7\u3092\u521D\u671F\u5316\u3057\u307E\u3057\u305F (loop_id: ${loop.loopId}, \u5408\u683C\u70B9 ${threshold}/100, \u6700\u5927 ${maxIter} \u5468)\u3002\u72B6\u614B: ${loop.dir}/` + (loop_auto_approve_criteria ? ` \u2014 \u57FA\u6E96\u306F auto-approved \u3067\u3059\u3002\u5B9F\u88C5\u304C\u7D42\u308F\u3063\u305F\u3089 fable_review \u3092\u547C\u3076\u3053\u3068\u3002` : ` \u2014 \u307E\u305A ${join(loop.dir, "criteria.md")} \u306E\u57FA\u6E96\u3092\u30E6\u30FC\u30B6\u30FC\u306B\u898B\u305B\u3001\u627F\u8A8D\u5F8C\u306B fable_loop_approve \u3092\u547C\u3093\u3067\u304F\u3060\u3055\u3044\u3002`) + ` state.json / criteria.md / task.md \u306F\u76F4\u63A5\u7DE8\u96C6\u7981\u6B62 (\u63A1\u70B9\u306E\u6539\u7AC4\u306B\u5F53\u305F\u308B)\u3002`;
       } catch (e) {
         res.text += `
 [fable-loop] \u521D\u671F\u5316\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${e.message}`;
@@ -21684,17 +22165,32 @@ server.tool(
     cwd: external_exports.string().describe("\u5BFE\u8C61\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u306E\u30EB\u30FC\u30C8\u7D76\u5BFE\u30D1\u30B9\u3002"),
     context: external_exports.string().optional().describe("\u7167\u5408\u3059\u3079\u304D\u5143\u306E\u8A2D\u8A08\u30D7\u30E9\u30F3\u3084\u610F\u56F3\u3002fable_plan \u306E\u51FA\u529B\u3092\u6E21\u3059\u3068\u8A2D\u8A08\u3068\u306E\u4E56\u96E2\u3092\u691C\u51FA\u3067\u304D\u308B\u3002"),
     session_id: external_exports.string().optional().describe("fable_plan \u3068\u540C\u3058\u4F1A\u8A71\u3067\u30EC\u30D3\u30E5\u30FC\u3055\u305B\u305F\u3044\u5834\u5408\u3001\u305D\u306E session_id\u3002"),
+    loop_id: external_exports.string().optional().describe("\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E loop_id\u3002\u7701\u7565\u6642\u306F .fable-loop/current.json \u306E\u73FE\u5728\u30EB\u30FC\u30D7\u3092\u4F7F\u3046\u3002"),
     effort: external_exports.enum(["low", "medium", "high", "xhigh", "max"]).optional().describe(
       "\u63A8\u8AD6\u306E\u6DF1\u3055\u3002\u5FB9\u5E95\u7684\u306A\u30EC\u30D3\u30E5\u30FC\u306A\u3089 xhigh\u3001\u8EFD\u3044\u78BA\u8A8D\u306A\u3089 medium\u3002\u672A\u6307\u5B9A\u306A\u3089\u30B5\u30FC\u30D0\u30FC\u306E\u30C7\u30D5\u30A9\u30EB\u30C8\u3002"
-    )
+    ),
+    evaluator_mode: external_exports.enum(["single", "ensemble", "debate"]).optional().describe(
+      "\u54C1\u8CEA\u30EB\u30FC\u30D7\u6642\u306E\u63A1\u70B9\u30E2\u30FC\u30C9\u3002single \u306F1\u56DE\u3001ensemble \u306F\u72EC\u7ACB\u63A1\u70B9\u3092\u8907\u6570\u56DE\u3001debate \u306FFable\u306B\u5185\u90E8\u53CD\u8A3C\u3092\u8981\u6C42\u3059\u308B\u3002\u30C7\u30D5\u30A9\u30EB\u30C8\u306F single\u3002"
+    ),
+    review_repeats: external_exports.number().int().min(1).max(3).optional().describe("ensemble \u63A1\u70B9\u306E\u56DE\u6570\u3002\u6700\u59273\u3002\u672A\u6307\u5B9A\u306A\u3089 ensemble \u30673\u3001\u305D\u306E\u4ED6\u30671\u3002")
   },
-  async ({ cwd, context, session_id, effort }, extra) => {
-    const state = readLoopState(cwd);
-    const loopMode = Boolean(state?.active);
+  async ({ cwd, context, session_id, loop_id, effort, evaluator_mode, review_repeats }, extra) => {
+    const loop = readLoop(cwd, loop_id);
+    const state = loop?.state;
+    const hasLoop = Boolean(state?.threshold);
+    if (hasLoop && !state.criteria_approved && !loop?.legacy) {
+      return toToolResult({
+        isError: true,
+        text: `\u54C1\u8CEA\u30EB\u30FC\u30D7 ${loop.loopId} \u306F\u53D7\u3051\u5165\u308C\u57FA\u6E96\u306E\u627F\u8A8D\u5F85\u3061\u3067\u3059\u3002
+${join(loop.dir, "criteria.md")} \u3092\u30E6\u30FC\u30B6\u30FC\u306B\u63D0\u793A\u3057\u3001\u627F\u8A8D\u3055\u308C\u305F\u3089 fable_loop_approve \u3092\u547C\u3093\u3067\u304F\u3060\u3055\u3044\u3002`
+      });
+    }
+    const loopMode = Boolean(state?.active && state?.criteria_approved);
     let prompt;
     if (loopMode) {
-      const taskText = safeReadLoopFile(cwd, "task.md");
-      const criteriaText = context || safeReadLoopFile(cwd, "criteria.md");
+      const taskText = safeReadLoopFile(loop, "task.md");
+      const criteriaText = context || safeReadLoopFile(loop, "criteria.md");
+      const debateInstruction = evaluator_mode === "debate" ? "\n- \u63A1\u70B9\u524D\u306B\u3001\u64C1\u8B77\u5074\u3068\u53CD\u8A3C\u5074\u306E2\u8996\u70B9\u3067\u77ED\u304F\u5185\u90E8\u8A0E\u8AD6\u3057\u3001\u6700\u5F8C\u306F\u53CD\u8A3C\u5074\u306E\u61F8\u5FF5\u3092\u53CD\u6620\u3057\u305F\u53B3\u3057\u3081\u306E\u7D76\u5BFE\u8A55\u4FA1\u306B\u3059\u308B" : "";
       prompt = `\u3042\u306A\u305F\u306F\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u300C\u63A1\u70B9\u4FC2\u300D\u3067\u3059\u3002\u5225\u306E\u30A8\u30FC\u30B8\u30A7\u30F3\u30C8\u304C\u5B9F\u88C5\u3057\u305F\u73FE\u5728\u306E\u30EA\u30DD\u30B8\u30C8\u30EA\u306E\u72B6\u614B\u3092\u3001\u53D7\u3051\u5165\u308C\u57FA\u6E96\u306B\u7167\u3089\u3057\u3066\u7D76\u5BFE\u8A55\u4FA1\u3057\u3066\u304F\u3060\u3055\u3044\u3002
 
 \u5951\u7D04 (\u9055\u53CD\u3057\u305F\u63A1\u70B9\u306F\u7121\u52B9):
@@ -21702,6 +22198,7 @@ server.tool(
 - \u53D7\u3051\u5165\u308C\u57FA\u6E96\u306E\u5909\u66F4\u30FB\u7DE9\u548C\u306F\u7981\u6B62\u3002\u57FA\u6E96\u306B\u306A\u3044\u65B0\u3057\u3044\u6C17\u3065\u304D\u306F feedback \u306B\u66F8\u304F (\u63A1\u70B9\u8EF8\u306B\u306F\u52A0\u3048\u306A\u3044)
 - \u524D\u56DE\u30B9\u30B3\u30A2\u3068\u306E\u76F8\u5BFE\u8A55\u4FA1\u3092\u3057\u306A\u3044\u3002\u6BCE\u56DE\u30BC\u30ED\u304B\u3089\u3001\u4F9D\u983C\u3068\u57FA\u6E96\u3078\u306E\u9069\u5408\u3060\u3051\u3067\u63A1\u70B9\u3059\u308B
 - \u6A5F\u68B0\u30C1\u30A7\u30C3\u30AF\u9805\u76EE\u306F\u3067\u304D\u308B\u9650\u308A\u5B9F\u969B\u306B\u30B3\u30DE\u30F3\u30C9\u3067\u78BA\u304B\u3081\u308B\u3002\u8AAD\u307F\u53D6\u308A\u5C02\u7528\u30E2\u30FC\u30C9\u3067\u5B9F\u884C\u3067\u304D\u306A\u3044\u5834\u5408\u306F\u3001\u30B3\u30FC\u30C9\u3068\u30C6\u30B9\u30C8\u5B9A\u7FA9\u3092\u8AAD\u3093\u3067\u5224\u5B9A\u3057\u3001\u305D\u306E\u65E8\u3092 feedback \u306B\u8A18\u3059
+${debateInstruction}
 
 <task>
 ${taskText}
@@ -21725,30 +22222,65 @@ ${context ? `
 ${context}
 </design>` : ""}`;
     }
-    const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    const repeats = loopMode ? Math.max(1, Math.min(3, Math.floor(review_repeats ?? (evaluator_mode === "ensemble" ? 3 : 1)))) : 1;
+    const results = [];
+    for (let i = 0; i < repeats; i++) {
+      const res2 = await runClaude({
+        prompt: repeats > 1 ? `${prompt}
+
+\u3053\u306E\u63A1\u70B9\u306F ensemble run ${i + 1}/${repeats} \u3067\u3059\u3002\u4ED6\u306E\u63A1\u70B9\u8005\u306E\u7D50\u679C\u306F\u898B\u305A\u3001\u72EC\u7ACB\u306B\u5224\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002` : prompt,
+        cwd,
+        sessionId: repeats > 1 ? void 0 : session_id,
+        effort,
+        onProgress: makeProgressReporter(extra),
+        signal: extra?.signal
+      });
+      results.push(res2);
+      if (res2.isError) break;
+    }
+    const res = results.length === 1 ? results[0] : {
+      isError: results.some((item) => item.isError),
+      text: results.map((item, idx) => `# Fable evaluator ${idx + 1}
+
+${item.text}`).join("\n\n---\n\n"),
+      rawText: results.map((item) => item.rawText || item.text).join("\n\n---\n\n"),
+      sessionId: results[0]?.sessionId || "",
+      effort: results[0]?.effort || "",
+      costUsd: results.reduce((sum, item) => sum + (typeof item.costUsd === "number" ? item.costUsd : 0), 0)
+    };
     if (loopMode && !res.isError) {
-      const m = [...res.text.matchAll(/<eval>([\s\S]*?)<\/eval>/g)].pop();
-      let ev = null;
-      if (m) {
-        try {
-          ev = JSON.parse(m[1].trim());
-        } catch {
-        }
-      }
-      const rawScore = ev ? Number(ev.score) : NaN;
-      if (!ev || !Number.isFinite(rawScore)) {
+      const evals = results.map((item) => parseEval(item.text));
+      const ev = aggregateEvals(evals);
+      if (!ev) {
         res.isError = true;
         res.text += "\n[fable-loop] \u63A1\u70B9JSON (<eval>{...}</eval>) \u3092\u53D6\u5F97\u3067\u304D\u306A\u304B\u3063\u305F\u305F\u3081\u3001state \u306F\u66F4\u65B0\u3057\u3066\u3044\u307E\u305B\u3093\u3002fable_review \u3092\u3082\u3046\u4E00\u5EA6\u547C\u3093\u3067\u304F\u3060\u3055\u3044\u3002";
       } else {
-        const score = Math.max(0, Math.min(100, Math.floor(rawScore)));
+        const score = Math.max(0, Math.min(100, Math.floor(ev.score)));
         const threshold = Math.floor(state.threshold ?? 90);
         const passed = score >= threshold;
         const iter = Math.floor(state.iteration ?? 0);
         try {
+          const changedPaths = listChangedPaths(cwd);
+          mergeWriteTargets(state, changedPaths);
+          updateLoopCost(state, res);
+          const iterRef = createLoopSnapshot(cwd, loop, state, iter, score);
           writeFileSync(
-            join(loopDir(cwd), "turns", `turn-${String(iter).padStart(3, "0")}-eval.json`),
+            join(loop.turnsDir, `turn-${String(iter).padStart(3, "0")}-eval.json`),
             JSON.stringify(
-              { score, breakdown: ev.breakdown ?? {}, feedback: ev.feedback ?? "", passed, threshold, iteration: iter, evaluated_at: (/* @__PURE__ */ new Date()).toISOString() },
+              {
+                score,
+                breakdown: ev.breakdown ?? {},
+                feedback: ev.feedback ?? "",
+                passed,
+                threshold,
+                iteration: iter,
+                evaluator_mode: evaluator_mode || "single",
+                ensemble_size: ev.ensemble_size || 1,
+                raw_scores: ev.raw_scores || [score],
+                changed_paths: changedPaths,
+                snapshot_ref: iterRef || "",
+                evaluated_at: (/* @__PURE__ */ new Date()).toISOString()
+              },
               null,
               2
             )
@@ -21756,13 +22288,16 @@ ${context}
           state.iteration = iter + 1;
           state.score = score;
           state.passed = passed;
+          state.phase = passed ? "passed" : "active";
           if (score > (state.best_score ?? 0)) {
             state.best_score = score;
             state.best_iteration = iter;
+            markBestSnapshot(cwd, loop, state, iterRef);
           }
-          writeLoopState(cwd, state);
+          writeLoopState(loop, state);
           res.text += `
-[fable-loop] iteration ${iter + 1}/${state.max} | score ${score}/${threshold} (\u5408\u5426\u306F server \u5074\u3067\u6A5F\u68B0\u5224\u5B9A) | ` + (passed ? "\u2705 \u5408\u683C \u2014 \u30EB\u30FC\u30D7\u306F\u30BF\u30FC\u30F3\u7D42\u4E86\u6642\u306B\u81EA\u52D5\u505C\u6B62\u3057\u307E\u3059" : "\u274C \u672A\u9054 \u2014 feedback \u306B\u5F93\u3063\u3066\u4FEE\u6B63\u3057\u3001\u518D\u5EA6 fable_review \u3092\u547C\u3093\u3067\u304F\u3060\u3055\u3044 (state.json \u306E\u76F4\u63A5\u7DE8\u96C6\u306F\u7981\u6B62)");
+[fable-loop] loop_id ${loop.loopId} | iteration ${iter + 1}/${state.max} | score ${score}/${threshold} (\u5408\u5426\u306F server \u5074\u3067\u6A5F\u68B0\u5224\u5B9A) | cost total ~$${Number(state.cumulative_cost_usd || 0).toFixed(4)} | ` + (passed ? "\u2705 \u5408\u683C \u2014 \u30EB\u30FC\u30D7\u306F\u30BF\u30FC\u30F3\u7D42\u4E86\u6642\u306B\u81EA\u52D5\u505C\u6B62\u3057\u307E\u3059" : "\u274C \u672A\u9054 \u2014 feedback \u306B\u5F93\u3063\u3066\u4FEE\u6B63\u3057\u3001\u518D\u5EA6 fable_review \u3092\u547C\u3093\u3067\u304F\u3060\u3055\u3044 (state.json \u306E\u76F4\u63A5\u7DE8\u96C6\u306F\u7981\u6B62)") + (state.best_snapshot_ref ? `
+[fable-loop] best snapshot: ${state.best_snapshot_ref}` : "");
         } catch (e) {
           res.text += `
 [fable-loop] state \u66F4\u65B0\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${e.message}`;

@@ -19,14 +19,16 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const VERSION = "0.6.2";
+const VERSION = "0.7.0";
 const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
 const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
@@ -197,6 +199,16 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
         resultEvent = ev;
         return;
       }
+      if (String(ev.type || "").includes("rate_limit")) {
+        const retry =
+          ev.retry_after_ms != null
+            ? ` retry_after=${Math.round(Number(ev.retry_after_ms) / 1000)}s`
+            : ev.retry_after != null
+              ? ` retry_after=${ev.retry_after}`
+              : "";
+        emitProgress(`レート制限中${retry}`.trim());
+        return;
+      }
       if (ev.type === "assistant") {
         for (const c of ev.message?.content || []) {
           if (c.type === "tool_use") {
@@ -251,8 +263,9 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
         return;
       }
       if (resultEvent && typeof resultEvent.result === "string") {
+        const costUsd = typeof resultEvent.total_cost_usd === "number" ? resultEvent.total_cost_usd : null;
         const cost =
-          typeof resultEvent.total_cost_usd === "number" ? `$${resultEvent.total_cost_usd.toFixed(2)}` : "n/a";
+          typeof costUsd === "number" ? `$${costUsd.toFixed(2)}` : "n/a";
         const turns = resultEvent.num_turns != null ? `${resultEvent.num_turns} turns` : "";
         const capNote =
           resultEvent.subtype === "error_max_turns"
@@ -267,6 +280,8 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
           rawText: resultEvent.result,
           sessionId: resultEvent.session_id || "",
           effort: effortLevel || "default(high)",
+          costUsd,
+          turns: resultEvent.num_turns ?? null,
         });
         return;
       }
@@ -336,29 +351,119 @@ function saveLastPlan(cwd, { planText, task, sessionId, effort }) {
  * (hooks/fable-loop-stop.mjs) の整数比較が行う。
  */
 
-function loopDir(cwd) {
+const LOOP_SCHEMA_VERSION = 2;
+const LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
+
+function loopRoot(cwd) {
   return join(cwd, ".fable-loop");
 }
 
-function readLoopState(cwd) {
+function loopSessionsDir(cwd) {
+  return join(loopRoot(cwd), "sessions");
+}
+
+function makeLoopId() {
+  return `loop-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomUUID().slice(0, 8)}`;
+}
+
+function assertLoopId(loopId) {
+  if (!LOOP_ID_RE.test(String(loopId || "")) || String(loopId).includes("..")) {
+    throw new Error(`Invalid loop_id: ${loopId}`);
+  }
+}
+
+function readCurrentLoopId(cwd) {
+  const current = safeReadJson(join(loopRoot(cwd), "current.json"));
+  if (current?.loop_id && LOOP_ID_RE.test(current.loop_id)) return current.loop_id;
+  return "";
+}
+
+function writeCurrentLoopId(cwd, loopId) {
+  mkdirSync(loopRoot(cwd), { recursive: true });
+  writeFileSync(join(loopRoot(cwd), "current.json"), JSON.stringify({ loop_id: loopId, updated_at: new Date().toISOString() }, null, 2));
+}
+
+function legacyLoopRef(cwd) {
+  return {
+    loopId: "legacy",
+    legacy: true,
+    dir: loopRoot(cwd),
+    statePath: join(loopRoot(cwd), "state.json"),
+    turnsDir: join(loopRoot(cwd), "turns"),
+  };
+}
+
+function sessionLoopRef(cwd, loopId) {
+  assertLoopId(loopId);
+  const dir = join(loopSessionsDir(cwd), loopId);
+  return {
+    loopId,
+    legacy: false,
+    dir,
+    statePath: join(dir, "state.json"),
+    turnsDir: join(dir, "turns"),
+  };
+}
+
+function resolveLoopRef(cwd, loopId) {
+  if (loopId) return sessionLoopRef(cwd, loopId);
+  const currentId = readCurrentLoopId(cwd);
+  if (currentId) {
+    const current = sessionLoopRef(cwd, currentId);
+    if (existsSync(current.statePath)) return current;
+  }
+  const legacy = legacyLoopRef(cwd);
+  if (existsSync(legacy.statePath)) return legacy;
+  return null;
+}
+
+function listLoopRefs(cwd) {
+  const refs = [];
   try {
-    return JSON.parse(readFileSync(join(loopDir(cwd), "state.json"), "utf8"));
+    for (const entry of readdirSync(loopSessionsDir(cwd), { withFileTypes: true })) {
+      if (entry.isDirectory() && LOOP_ID_RE.test(entry.name)) refs.push(sessionLoopRef(cwd, entry.name));
+    }
+  } catch {
+    /* no sessions yet */
+  }
+  const legacy = legacyLoopRef(cwd);
+  if (existsSync(legacy.statePath)) refs.push(legacy);
+  const seen = new Set();
+  return refs.filter((ref) => {
+    const key = ref.legacy ? "legacy" : ref.loopId;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function readLoop(cwd, loopId) {
+  const ref = resolveLoopRef(cwd, loopId);
+  if (!ref || !existsSync(ref.statePath)) return null;
+  try {
+    return { ...ref, state: JSON.parse(readFileSync(ref.statePath, "utf8")) };
   } catch {
     return null;
   }
 }
 
-function writeLoopState(cwd, state) {
+function writeLoopState(loop, state) {
   state.updated_at = new Date().toISOString();
-  writeFileSync(join(loopDir(cwd), "state.json"), JSON.stringify(state, null, 2));
+  writeFileSync(loop.statePath, JSON.stringify(state, null, 2));
 }
 
-function initLoop(cwd, task, criteriaText, threshold, max) {
-  mkdirSync(join(loopDir(cwd), "turns"), { recursive: true });
-  writeFileSync(join(loopDir(cwd), "task.md"), task);
-  writeFileSync(join(loopDir(cwd), "criteria.md"), criteriaText);
-  writeLoopState(cwd, {
-    active: true,
+function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", effort = "", costUsd = null, autoApprove = false } = {}) {
+  const loopId = makeLoopId();
+  const loop = sessionLoopRef(cwd, loopId);
+  mkdirSync(loop.turnsDir, { recursive: true });
+  writeFileSync(join(loop.dir, "task.md"), task);
+  writeFileSync(join(loop.dir, "criteria.md"), criteriaText);
+  writeLoopState(loop, {
+    schema_version: LOOP_SCHEMA_VERSION,
+    loop_id: loopId,
+    active: Boolean(autoApprove),
+    criteria_approved: Boolean(autoApprove),
+    phase: autoApprove ? "active" : "awaiting_criteria_approval",
     iteration: 0,
     score: 0,
     passed: false,
@@ -366,17 +471,250 @@ function initLoop(cwd, task, criteriaText, threshold, max) {
     max,
     best_score: 0,
     best_iteration: -1,
+    best_snapshot_ref: "",
+    last_snapshot_ref: "",
     last_blocked_iteration: -1,
+    cumulative_cost_usd: typeof costUsd === "number" ? costUsd : 0,
+    last_cost_usd: typeof costUsd === "number" ? costUsd : 0,
+    fable_session_id: sessionId || "",
+    effort: effort || "",
+    snapshot_enabled: isGitRepo(cwd),
+    snapshot_status: isGitRepo(cwd) ? "ready" : "disabled: not a git repository",
+    write_targets: [],
+    ended_reason: "",
     started_at: new Date().toISOString(),
   });
+  writeCurrentLoopId(cwd, loopId);
+  return loop;
 }
 
-function safeReadLoopFile(cwd, name) {
+function safeReadLoopFile(loop, name) {
   try {
-    return readFileSync(join(loopDir(cwd), name), "utf8");
+    return readFileSync(join(loop.dir, name), "utf8");
   } catch {
     return "";
   }
+}
+
+function runGit(cwd, args, options = {}) {
+  return spawnSync("git", args, {
+    cwd,
+    env: { ...process.env, ...(options.env || {}) },
+    input: options.input,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: options.timeout ?? 15000,
+  });
+}
+
+function isGitRepo(cwd) {
+  const res = runGit(cwd, ["rev-parse", "--is-inside-work-tree"], { timeout: 5000 });
+  return res.status === 0 && String(res.stdout).trim() === "true";
+}
+
+function hasHead(cwd) {
+  return runGit(cwd, ["rev-parse", "--verify", "HEAD"], { timeout: 5000 }).status === 0;
+}
+
+function normalizeRepoPath(path) {
+  return String(path || "").replaceAll("\\", "/").replace(/^\/+/, "");
+}
+
+function isStatePath(path) {
+  const p = normalizeRepoPath(path);
+  return p === ".fable-loop" || p.startsWith(".fable-loop/") || p === ".fable" || p.startsWith(".fable/");
+}
+
+function listChangedPaths(cwd) {
+  if (!isGitRepo(cwd)) return [];
+  const res = runGit(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], { timeout: 15000 });
+  if (res.status !== 0) return [];
+  const parts = res.stdout.split("\0").filter(Boolean);
+  const paths = [];
+  for (let i = 0; i < parts.length; i++) {
+    const item = parts[i];
+    const status = item.slice(0, 2);
+    let path = item.slice(3);
+    if (status.includes("R") || status.includes("C")) {
+      const next = parts[i + 1];
+      if (next) {
+        path = next;
+        i++;
+      }
+    }
+    path = normalizeRepoPath(path);
+    if (path && !isStatePath(path)) paths.push(path);
+  }
+  return [...new Set(paths)].sort();
+}
+
+function mergeWriteTargets(state, paths) {
+  const merged = new Set(Array.isArray(state.write_targets) ? state.write_targets.map(normalizeRepoPath) : []);
+  for (const path of paths) {
+    const normalized = normalizeRepoPath(path);
+    if (normalized && !isStatePath(normalized)) merged.add(normalized);
+  }
+  state.write_targets = [...merged].sort();
+}
+
+function updateLoopCost(state, res) {
+  if (typeof res?.costUsd !== "number") return;
+  state.last_cost_usd = res.costUsd;
+  state.cumulative_cost_usd = Number((Number(state.cumulative_cost_usd || 0) + res.costUsd).toFixed(6));
+}
+
+function snapshotRef(loopId, name) {
+  assertLoopId(loopId);
+  return `refs/fable-loop/${loopId}/${name}`;
+}
+
+function createLoopSnapshot(cwd, loop, state, iteration, score) {
+  if (!state.snapshot_enabled || loop.legacy || !isGitRepo(cwd)) {
+    state.snapshot_status = state.snapshot_status || "disabled";
+    return null;
+  }
+
+  const gitIndexFile = join(mkdtempSync(join(tmpdir(), "fable-loop-index-")), "index");
+  try {
+    const env = {
+      GIT_INDEX_FILE: gitIndexFile,
+      GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || "fable-mcp",
+      GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL || "fable-mcp@example.invalid",
+      GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || "fable-mcp",
+      GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || "fable-mcp@example.invalid",
+    };
+    const parentArgs = [];
+    if (hasHead(cwd)) {
+      const readTree = runGit(cwd, ["read-tree", "HEAD"], { env });
+      if (readTree.status !== 0) throw new Error(readTree.stderr || "git read-tree failed");
+      const head = runGit(cwd, ["rev-parse", "HEAD"], { timeout: 5000 });
+      if (head.status === 0) parentArgs.push("-p", head.stdout.trim());
+    } else {
+      const readTree = runGit(cwd, ["read-tree", "--empty"], { env });
+      if (readTree.status !== 0) throw new Error(readTree.stderr || "git read-tree --empty failed");
+    }
+
+    const add = runGit(cwd, ["add", "-A", "--", "."], { env, timeout: 30000 });
+    if (add.status !== 0) throw new Error(add.stderr || "git add failed");
+    runGit(cwd, ["rm", "-r", "--cached", "--ignore-unmatch", ".fable-loop", ".fable"], { env, timeout: 15000 });
+    const tree = runGit(cwd, ["write-tree"], { env });
+    if (tree.status !== 0) throw new Error(tree.stderr || "git write-tree failed");
+
+    const msg = `fable-loop ${loop.loopId} iteration ${iteration} score ${score}`;
+    const commit = runGit(cwd, ["commit-tree", tree.stdout.trim(), ...parentArgs], { env, input: `${msg}\n`, timeout: 15000 });
+    if (commit.status !== 0) throw new Error(commit.stderr || "git commit-tree failed");
+    const commitId = commit.stdout.trim();
+    const iterRef = snapshotRef(loop.loopId, `iter-${String(iteration).padStart(3, "0")}`);
+    const update = runGit(cwd, ["update-ref", iterRef, commitId], { timeout: 15000 });
+    if (update.status !== 0) throw new Error(update.stderr || "git update-ref failed");
+    state.last_snapshot_ref = iterRef;
+    state.snapshot_status = "ok";
+    return iterRef;
+  } catch (e) {
+    state.snapshot_status = `failed: ${e.message}`;
+    return null;
+  } finally {
+    try {
+      rmSync(dirname(gitIndexFile), { recursive: true, force: true });
+    } catch {
+      /* temp cleanup best effort */
+    }
+  }
+}
+
+function markBestSnapshot(cwd, loop, state, iterRef) {
+  if (!iterRef || loop.legacy || !isGitRepo(cwd)) return;
+  const bestRef = snapshotRef(loop.loopId, "best");
+  const commit = runGit(cwd, ["rev-parse", iterRef], { timeout: 5000 });
+  if (commit.status !== 0) {
+    state.snapshot_status = `failed: ${commit.stderr || "snapshot ref missing"}`;
+    return;
+  }
+  const update = runGit(cwd, ["update-ref", bestRef, commit.stdout.trim()], { timeout: 15000 });
+  if (update.status === 0) {
+    state.best_snapshot_ref = bestRef;
+  } else {
+    state.snapshot_status = `failed: ${update.stderr || "best ref update failed"}`;
+  }
+}
+
+function gitPathExistsAtRef(cwd, ref, path) {
+  return runGit(cwd, ["cat-file", "-e", `${ref}:${path}`], { timeout: 5000 }).status === 0;
+}
+
+function removeRepoPath(cwd, path) {
+  const target = join(cwd, path);
+  const rel = relative(cwd, target);
+  if (!rel || rel.startsWith("..") || rel === "." || isStatePath(rel)) {
+    throw new Error(`Refusing to remove unsafe path: ${path}`);
+  }
+  rmSync(target, { recursive: true, force: true });
+}
+
+function restoreBestSnapshot(cwd, loop, state, paths = []) {
+  const ref = state.best_snapshot_ref;
+  if (!ref) throw new Error("No best snapshot ref is recorded for this loop.");
+  if (!isGitRepo(cwd)) throw new Error("Best snapshot restore requires a git repository.");
+  const selected = paths.length ? paths.map(normalizeRepoPath) : Array.isArray(state.write_targets) ? state.write_targets.map(normalizeRepoPath) : [];
+  const safePaths = [...new Set(selected.filter((path) => path && !isStatePath(path)))].sort();
+  if (safePaths.length === 0) {
+    throw new Error("No write_targets are recorded. Pass explicit paths to restore.");
+  }
+
+  const restored = [];
+  const removed = [];
+  for (const path of safePaths) {
+    if (gitPathExistsAtRef(cwd, ref, path)) {
+      const co = runGit(cwd, ["checkout", ref, "--", path], { timeout: 30000 });
+      if (co.status !== 0) throw new Error(co.stderr || `git checkout failed for ${path}`);
+      restored.push(path);
+    } else {
+      removeRepoPath(cwd, path);
+      removed.push(path);
+    }
+  }
+  return { restored, removed, ref };
+}
+
+function parseEval(text) {
+  const m = [...String(text || "").matchAll(/<eval>([\s\S]*?)<\/eval>/g)].pop();
+  if (!m) return null;
+  try {
+    const ev = JSON.parse(m[1].trim());
+    const score = Number(ev.score);
+    if (!Number.isFinite(score)) return null;
+    return {
+      score: Math.max(0, Math.min(100, Math.floor(score))),
+      breakdown: ev.breakdown && typeof ev.breakdown === "object" ? ev.breakdown : {},
+      feedback: String(ev.feedback || ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function aggregateEvals(evals) {
+  const valid = evals.filter(Boolean);
+  if (valid.length === 0) return null;
+  if (valid.length === 1) return valid[0];
+  const scores = valid.map((ev) => ev.score).sort((a, b) => a - b);
+  const median = scores[Math.floor(scores.length / 2)];
+  const keys = new Set();
+  for (const ev of valid) {
+    for (const key of Object.keys(ev.breakdown || {})) keys.add(key);
+  }
+  const breakdown = {};
+  for (const key of keys) {
+    const nums = valid.map((ev) => Number(ev.breakdown?.[key])).filter(Number.isFinite);
+    if (nums.length) breakdown[key] = Math.round(nums.reduce((a, b) => a + b, 0) / nums.length);
+  }
+  return {
+    score: median,
+    breakdown,
+    feedback: valid.map((ev, idx) => `Evaluator ${idx + 1} (score ${ev.score}):\n${ev.feedback}`).join("\n\n"),
+    ensemble_size: valid.length,
+    raw_scores: valid.map((ev) => ev.score),
+  };
 }
 
 /** MCP クライアントが progressToken を渡してきた場合のみ進捗通知を送る */
@@ -457,27 +795,109 @@ function safeReadJson(path) {
   }
 }
 
+function safeReadText(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function codexConfigSnapshot() {
+  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+  const configPath = join(codexHome, "config.toml");
+  const hooksPath = join(codexHome, "hooks.json");
+  const agentsPath = join(codexHome, "AGENTS.md");
+  const config = safeReadText(configPath);
+  const hooks = safeReadText(hooksPath);
+  const agents = safeReadText(agentsPath);
+  return {
+    codexHome,
+    configPath,
+    hooksPath,
+    agentsPath,
+    manualMcpConfig: /^\s*\[mcp_servers\.fable\]\s*$/m.test(config),
+    pluginEnvTable: /^\s*\[plugins\."fable-mcp@fable-mcp"\.mcp_servers\.fable\.env\]\s*$/m.test(config),
+    manualHookConfig: hooks.includes("fable-loop-stop.mjs"),
+    globalAgentFableRules: /Fable 5 Orchestration|Fable 5 オーケストレーション|fable_plan|fable_review/.test(agents),
+  };
+}
+
+function codexConfigLines(snapshot) {
+  const duplicateRisk = snapshot.manualMcpConfig || snapshot.manualHookConfig || snapshot.globalAgentFableRules;
+  return [
+    `- CODEX_HOME: ${snapshot.codexHome}`,
+    `- manual [mcp_servers.fable]: ${snapshot.manualMcpConfig ? "found" : "not found"}`,
+    `- plugin env table: ${snapshot.pluginEnvTable ? "found" : "not found"}`,
+    `- manual hooks.json fable-loop-stop: ${snapshot.manualHookConfig ? "found" : "not found"}`,
+    `- global AGENTS Fable rules: ${snapshot.globalAgentFableRules ? "found" : "not found"}`,
+    `- duplicate-registration risk: ${duplicateRisk ? "attention" : "none detected"}`,
+  ];
+}
+
 function readLoopSnapshot(cwd) {
-  const statePath = join(loopDir(cwd), "state.json");
-  if (!existsSync(statePath)) return { exists: false, statePath };
-  const state = safeReadJson(statePath);
-  if (!state) return { exists: true, valid: false, statePath };
-  const threshold = Math.floor(state.threshold ?? 90);
-  const iteration = Math.floor(state.iteration ?? 0);
-  const max = Number.isFinite(Number(state.max)) ? Math.floor(Number(state.max)) : "unknown";
-  const score = Number.isFinite(Number(state.score)) ? Math.floor(Number(state.score)) : "unknown";
-  const active = Boolean(state.active);
-  const passed = Boolean(state.passed) || (Number.isFinite(Number(score)) && score >= threshold);
-  return { exists: true, valid: true, statePath, threshold, iteration, max, score, active, passed };
+  const refs = listLoopRefs(cwd);
+  if (refs.length === 0) return { exists: false, root: loopRoot(cwd), loops: [] };
+  const currentId = readCurrentLoopId(cwd);
+  const loops = refs.map((ref) => {
+    const state = safeReadJson(ref.statePath);
+    if (!state) return { exists: true, valid: false, loopId: ref.loopId, statePath: ref.statePath, legacy: ref.legacy };
+    const threshold = Math.floor(state.threshold ?? 90);
+    const iteration = Math.floor(state.iteration ?? 0);
+    const max = Number.isFinite(Number(state.max)) ? Math.floor(Number(state.max)) : "unknown";
+    const score = Number.isFinite(Number(state.score)) ? Math.floor(Number(state.score)) : "unknown";
+    const active = Boolean(state.active);
+    const criteriaApproved = Boolean(state.criteria_approved ?? ref.legacy);
+    const passed = Boolean(state.passed) || (Number.isFinite(Number(score)) && score >= threshold);
+    return {
+      exists: true,
+      valid: true,
+      loopId: state.loop_id || ref.loopId,
+      statePath: ref.statePath,
+      legacy: ref.legacy,
+      threshold,
+      iteration,
+      max,
+      score,
+      active,
+      criteriaApproved,
+      phase: state.phase || (active ? "active" : "inactive"),
+      passed,
+      endedReason: state.ended_reason || "",
+      bestScore: Number.isFinite(Number(state.best_score)) ? Math.floor(Number(state.best_score)) : 0,
+      bestIteration: Number.isFinite(Number(state.best_iteration)) ? Math.floor(Number(state.best_iteration)) : -1,
+      bestSnapshotRef: state.best_snapshot_ref || "",
+      cumulativeCostUsd: Number(state.cumulative_cost_usd || 0),
+    };
+  });
+  const current =
+    loops.find((loop) => !loop.legacy && loop.loopId === currentId) ||
+    loops.find((loop) => loop.active) ||
+    loops[0];
+  return { exists: true, root: loopRoot(cwd), currentId, current, loops };
 }
 
 function loopStatusLines(loop) {
-  if (!loop.exists) return ["- quality loop: inactive (.fable-loop/state.json not found)"];
-  if (!loop.valid) return [`- quality loop: state exists but is not valid JSON (${loop.statePath})`];
-  return [
-    `- quality loop: ${loop.active ? "active" : "inactive"} | iteration ${loop.iteration}/${loop.max} | score ${loop.score}/${loop.threshold} | passed: ${loop.passed ? "yes" : "no"}`,
-    `- quality loop state: ${loop.statePath}`,
-  ];
+  if (!loop.exists) return ["- quality loop: inactive (.fable-loop not found)"];
+  const lines = [`- quality loop root: ${loop.root}`];
+  for (const item of loop.loops) {
+    if (!item.valid) {
+      lines.push(`- ${item.loopId}: state exists but is not valid JSON (${item.statePath})`);
+      continue;
+    }
+    const marker = loop.current?.loopId === item.loopId ? "current, " : "";
+    const approval = item.criteriaApproved ? "approved" : "awaiting criteria approval";
+    const cost = item.cumulativeCostUsd ? ` | cumulative cost ~$${item.cumulativeCostUsd.toFixed(4)}` : "";
+    const best =
+      item.bestIteration >= 0
+        ? ` | best ${item.bestScore}/100 at iteration ${item.bestIteration + 1}${item.bestSnapshotRef ? " (snapshot ready)" : ""}`
+        : "";
+    lines.push(
+      `- ${item.loopId}: ${marker}${item.active ? "active" : "inactive"} | ${approval} | iteration ${item.iteration}/${item.max} | score ${item.score}/${item.threshold} | passed: ${item.passed ? "yes" : "no"}${best}${cost}`
+    );
+    lines.push(`  state: ${item.statePath}`);
+  }
+  return lines;
 }
 
 function nextActionLines({ claude, hasApiKey, effort, timeoutValid, maxTurnsValid, lastPlanExists, loop }) {
@@ -499,20 +919,23 @@ function nextActionLines({ claude, hasApiKey, effort, timeoutValid, maxTurnsVali
     actions.push(`${actions.length + 1}. Cost check: FABLE_EFFORT=${effort}. Prefer per-call max/xhigh only when the user explicitly asks for deep reasoning.`);
   }
 
-  if (loop.exists && !loop.valid) {
-    actions.push(`${actions.length + 1}. Inspect ${loop.statePath}; the quality-loop state JSON is invalid.`);
-  } else if (loop.valid && loop.active && !loop.passed) {
-    actions.push(`${actions.length + 1}. Quality loop is active. Implement the latest feedback, then call ` + "`fable_review` again.");
-  } else if (loop.valid && loop.active && loop.passed) {
-    actions.push(`${actions.length + 1}. Quality loop has passed. Finish by summarizing the result or committing the verified changes.`);
+  const currentLoop = loop.current;
+  if (loop.exists && currentLoop && !currentLoop.valid) {
+    actions.push(`${actions.length + 1}. Inspect ${currentLoop.statePath}; the quality-loop state JSON is invalid.`);
+  } else if (currentLoop?.valid && !currentLoop.criteriaApproved) {
+    actions.push(`${actions.length + 1}. Review the criteria in the loop state, then call ` + "`fable_loop_approve` if the user accepts them.");
+  } else if (currentLoop?.valid && currentLoop.active && !currentLoop.passed) {
+    actions.push(`${actions.length + 1}. Quality loop ${currentLoop.loopId} is active. Implement the latest feedback, then call ` + "`fable_review` again.");
+  } else if (currentLoop?.valid && currentLoop.active && currentLoop.passed) {
+    actions.push(`${actions.length + 1}. Quality loop ${currentLoop.loopId} has passed. Finish by summarizing the result or committing the verified changes.`);
   }
 
   if (actions.length === 0) {
     actions.push("1. Setup looks ready. Try: `Fable5に聞いて: このリポジトリは何をするもの?`");
     actions.push("2. For implementation work, enter Codex Plan mode or ask: `Fableでプラン作って`.");
-  } else if (claude.ok && hasApiKey && !lastPlanExists && !(loop.valid && loop.active)) {
+  } else if (claude.ok && hasApiKey && !lastPlanExists && !(currentLoop?.valid && currentLoop.active)) {
     actions.push(`${actions.length + 1}. After the setup warning is resolved, try: ` + "`Fable5に聞いて: このリポジトリは何をするもの?`");
-  } else if (lastPlanExists && !(loop.valid && loop.active && !loop.passed)) {
+  } else if (lastPlanExists && !(currentLoop?.valid && currentLoop.active && !currentLoop.passed)) {
     actions.push(`${actions.length + 1}. A saved Fable plan exists. Read ` + "`.fable/last-plan.md`, implement it, then call `fable_review`.");
   }
 
@@ -536,6 +959,16 @@ function statusText(cwd) {
   const lastPlan = join(fableDir(projectCwd), "last-plan.md");
   const lastPlanExists = existsSync(lastPlan);
   const loop = readLoopSnapshot(projectCwd);
+  const codexConfig = codexConfigSnapshot();
+  if (runtimeMode().includes("plugin") && codexConfig.manualMcpConfig) {
+    warnings.push(`Manual [mcp_servers.fable] is still present in ${codexConfig.configPath}. Remove it when using the Codex plugin to avoid double registration.`);
+  }
+  if (runtimeMode().includes("plugin") && codexConfig.manualHookConfig) {
+    warnings.push(`Manual fable-loop Stop hook is still present in ${codexConfig.hooksPath}. Remove it when using the Codex plugin to avoid double hook execution.`);
+  }
+  if (runtimeMode().includes("plugin") && codexConfig.globalAgentFableRules) {
+    warnings.push(`Global AGENTS.md contains Fable orchestration rules. Prefer the plugin-bundled rules to avoid stale or duplicated routing.`);
+  }
   const authMode = hasApiKey
     ? "ANTHROPIC_API_KEY present: Anthropic API metered billing"
     : "no ANTHROPIC_API_KEY: claude CLI login/session, if available";
@@ -559,6 +992,9 @@ function statusText(cwd) {
     `- default effort: ${effort}`,
     `- max turns per call: ${MAX_TURNS > 0 ? MAX_TURNS : "unlimited"}`,
     `- timeout per call: ${formatDuration(TIMEOUT_MS)}`,
+    "",
+    "## Codex Registration",
+    ...codexConfigLines(codexConfig),
     "",
     "## Project Files",
     `- last verbatim Fable plan: ${lastPlanExists ? lastPlan : "not found yet (.fable/last-plan.md will be created by fable_plan)"}`,
@@ -593,6 +1029,92 @@ server.tool(
       .describe("診断対象プロジェクトのルート絶対パス。省略時は MCP サーバーの現在ディレクトリ。"),
   },
   async ({ cwd }) => toToolResult({ isError: false, text: statusText(cwd) })
+);
+
+server.tool(
+  "fable_loop_approve",
+  "品質ループの受け入れ基準をユーザーが承認した後に呼ぶ。承認待ちの loop_id を active にし、以後 fable_review と Stop hook がループを進める。Fable 本体は呼ばないため API コストは発生しない。",
+  {
+    cwd: z.string().describe("対象プロジェクトのルート絶対パス。"),
+    loop_id: z.string().optional().describe("承認する loop_id。省略時は現在ループ。"),
+  },
+  async ({ cwd, loop_id }) => {
+    const loop = readLoop(cwd, loop_id);
+    if (!loop) {
+      return toToolResult({ isError: true, text: "承認対象の品質ループが見つかりません。先に fable_plan with loop_threshold を呼んでください。" });
+    }
+    const state = loop.state;
+    state.criteria_approved = true;
+    state.active = true;
+    state.phase = "active";
+    state.ended_reason = "";
+    state.approved_at = new Date().toISOString();
+    writeLoopState(loop, state);
+    if (!loop.legacy) writeCurrentLoopId(cwd, loop.loopId);
+    return toToolResult({
+      isError: false,
+      text:
+        `品質ループ ${loop.loopId} の受け入れ基準を承認し、active にしました。\n` +
+        `次の手順: 実装を進め、完了後に fable_review を呼んで採点してください。`,
+    });
+  }
+);
+
+server.tool(
+  "fable_loop_abort",
+  "品質ループを安全に中断する。state.json を直接編集せず、active=false と ended_reason を機械的に記録する。Fable 本体は呼ばないため API コストは発生しない。",
+  {
+    cwd: z.string().describe("対象プロジェクトのルート絶対パス。"),
+    loop_id: z.string().optional().describe("中断する loop_id。省略時は現在ループ。"),
+    reason: z.string().optional().describe("中断理由。省略時は user_aborted。"),
+  },
+  async ({ cwd, loop_id, reason }) => {
+    const loop = readLoop(cwd, loop_id);
+    if (!loop) return toToolResult({ isError: true, text: "中断対象の品質ループが見つかりません。" });
+    const state = loop.state;
+    state.active = false;
+    state.phase = "aborted";
+    state.ended_reason = reason || "user_aborted";
+    state.aborted_at = new Date().toISOString();
+    writeLoopState(loop, state);
+    return toToolResult({
+      isError: false,
+      text:
+        `品質ループ ${loop.loopId} を中断しました (reason: ${state.ended_reason})。\n` +
+        (state.best_snapshot_ref
+          ? `best snapshot は保持されています: ${state.best_snapshot_ref}\n必要なら fable_loop_restore_best で復元できます。`
+          : "best snapshot はまだありません。"),
+    });
+  }
+);
+
+server.tool(
+  "fable_loop_restore_best",
+  "品質ループで記録された best snapshot を作業ツリーへ復元する。復元対象は write_targets または明示 paths に限定し、.fable-loop/.fable は触らない。Fable 本体は呼ばないため API コストは発生しない。",
+  {
+    cwd: z.string().describe("対象プロジェクトのルート絶対パス。"),
+    loop_id: z.string().optional().describe("復元する loop_id。省略時は現在ループ。"),
+    paths: z.array(z.string()).optional().describe("復元対象パス。省略時は state.write_targets を使う。"),
+  },
+  async ({ cwd, loop_id, paths }) => {
+    const loop = readLoop(cwd, loop_id);
+    if (!loop) return toToolResult({ isError: true, text: "復元対象の品質ループが見つかりません。" });
+    try {
+      const result = restoreBestSnapshot(cwd, loop, loop.state, paths || []);
+      loop.state.restored_best_at = new Date().toISOString();
+      loop.state.restored_best_ref = result.ref;
+      writeLoopState(loop, loop.state);
+      return toToolResult({
+        isError: false,
+        text:
+          `best snapshot を復元しました: ${result.ref}\n` +
+          `restored:\n${result.restored.map((path) => `- ${path}`).join("\n") || "- (none)"}\n` +
+          `removed:\n${result.removed.map((path) => `- ${path}`).join("\n") || "- (none)"}`,
+      });
+    } catch (e) {
+      return toToolResult({ isError: true, text: `best snapshot の復元に失敗しました: ${e.message}` });
+    }
+  }
 );
 
 server.tool(
@@ -631,8 +1153,14 @@ server.tool(
       .max(20)
       .optional()
       .describe("品質ループの最大周回数 (デフォルト 4)。無限ループ防止のブレーキ。"),
+    loop_auto_approve_criteria: z
+      .boolean()
+      .optional()
+      .describe(
+        "true の場合だけ、Fable が作った受け入れ基準を人間承認なしで即アクティブ化する。通常は省略し、fable_loop_approve で明示承認する。"
+      ),
   },
-  async ({ task, cwd, session_id, effort, loop_threshold, loop_max_iterations }, extra) => {
+  async ({ task, cwd, session_id, effort, loop_threshold, loop_max_iterations, loop_auto_approve_criteria }, extra) => {
     const threshold = loop_threshold != null ? Math.floor(loop_threshold) : null;
     const maxIter = Math.floor(loop_max_iterations ?? 4);
     const criteriaSection =
@@ -681,11 +1209,19 @@ ${task}
       const m = [...res.text.matchAll(/<criteria>([\s\S]*?)<\/criteria>/g)].pop();
       const criteriaText = m ? m[1].trim() : res.text;
       try {
-        initLoop(cwd, task, criteriaText, threshold, maxIter);
+        const loop = initLoop(cwd, task, criteriaText, threshold, maxIter, {
+          sessionId: res.sessionId,
+          effort: res.effort,
+          costUsd: res.costUsd,
+          autoApprove: Boolean(loop_auto_approve_criteria),
+        });
         res.text +=
-          `\n[fable-loop] 品質ループを初期化しました (合格点 ${threshold}/100, 最大 ${maxIter} 周)。` +
-          `状態: ${join(cwd, ".fable-loop")}/ — 実装が終わったら fable_review を呼ぶこと。` +
-          `state.json / criteria.md / task.md は直接編集禁止 (採点の改竄に当たる)。`;
+          `\n[fable-loop] 品質ループを初期化しました (loop_id: ${loop.loopId}, 合格点 ${threshold}/100, 最大 ${maxIter} 周)。` +
+          `状態: ${loop.dir}/` +
+          (loop_auto_approve_criteria
+            ? ` — 基準は auto-approved です。実装が終わったら fable_review を呼ぶこと。`
+            : ` — まず ${join(loop.dir, "criteria.md")} の基準をユーザーに見せ、承認後に fable_loop_approve を呼んでください。`) +
+          ` state.json / criteria.md / task.md は直接編集禁止 (採点の改竄に当たる)。`;
       } catch (e) {
         res.text += `\n[fable-loop] 初期化に失敗しました: ${e.message}`;
       }
@@ -744,21 +1280,52 @@ server.tool(
       .string()
       .optional()
       .describe("fable_plan と同じ会話でレビューさせたい場合、その session_id。"),
+    loop_id: z
+      .string()
+      .optional()
+      .describe("品質ループの loop_id。省略時は .fable-loop/current.json の現在ループを使う。"),
     effort: z
       .enum(["low", "medium", "high", "xhigh", "max"])
       .optional()
       .describe(
         "推論の深さ。徹底的なレビューなら xhigh、軽い確認なら medium。未指定ならサーバーのデフォルト。"
       ),
+    evaluator_mode: z
+      .enum(["single", "ensemble", "debate"])
+      .optional()
+      .describe(
+        "品質ループ時の採点モード。single は1回、ensemble は独立採点を複数回、debate はFableに内部反証を要求する。デフォルトは single。"
+      ),
+    review_repeats: z
+      .number()
+      .int()
+      .min(1)
+      .max(3)
+      .optional()
+      .describe("ensemble 採点の回数。最大3。未指定なら ensemble で3、その他で1。"),
   },
-  async ({ cwd, context, session_id, effort }, extra) => {
-    const state = readLoopState(cwd);
-    const loopMode = Boolean(state?.active);
+  async ({ cwd, context, session_id, loop_id, effort, evaluator_mode, review_repeats }, extra) => {
+    const loop = readLoop(cwd, loop_id);
+    const state = loop?.state;
+    const hasLoop = Boolean(state?.threshold);
+    if (hasLoop && !state.criteria_approved && !loop?.legacy) {
+      return toToolResult({
+        isError: true,
+        text:
+          `品質ループ ${loop.loopId} は受け入れ基準の承認待ちです。\n` +
+          `${join(loop.dir, "criteria.md")} をユーザーに提示し、承認されたら fable_loop_approve を呼んでください。`,
+      });
+    }
+    const loopMode = Boolean(state?.active && state?.criteria_approved);
 
     let prompt;
     if (loopMode) {
-      const taskText = safeReadLoopFile(cwd, "task.md");
-      const criteriaText = context || safeReadLoopFile(cwd, "criteria.md");
+      const taskText = safeReadLoopFile(loop, "task.md");
+      const criteriaText = context || safeReadLoopFile(loop, "criteria.md");
+      const debateInstruction =
+        evaluator_mode === "debate"
+          ? "\n- 採点前に、擁護側と反証側の2視点で短く内部討論し、最後は反証側の懸念を反映した厳しめの絶対評価にする"
+          : "";
       prompt = `あなたは品質ループの「採点係」です。別のエージェントが実装した現在のリポジトリの状態を、受け入れ基準に照らして絶対評価してください。
 
 契約 (違反した採点は無効):
@@ -766,6 +1333,7 @@ server.tool(
 - 受け入れ基準の変更・緩和は禁止。基準にない新しい気づきは feedback に書く (採点軸には加えない)
 - 前回スコアとの相対評価をしない。毎回ゼロから、依頼と基準への適合だけで採点する
 - 機械チェック項目はできる限り実際にコマンドで確かめる。読み取り専用モードで実行できない場合は、コードとテスト定義を読んで判定し、その旨を feedback に記す
+${debateInstruction}
 
 <task>
 ${taskText}
@@ -786,34 +1354,69 @@ ${criteriaText}
 ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : ""}`;
     }
 
-    const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    const repeats = loopMode
+      ? Math.max(1, Math.min(3, Math.floor(review_repeats ?? (evaluator_mode === "ensemble" ? 3 : 1))))
+      : 1;
+    const results = [];
+    for (let i = 0; i < repeats; i++) {
+      const res = await runClaude({
+        prompt: repeats > 1 ? `${prompt}\n\nこの採点は ensemble run ${i + 1}/${repeats} です。他の採点者の結果は見ず、独立に判定してください。` : prompt,
+        cwd,
+        sessionId: repeats > 1 ? undefined : session_id,
+        effort,
+        onProgress: makeProgressReporter(extra),
+        signal: extra?.signal,
+      });
+      results.push(res);
+      if (res.isError) break;
+    }
+    const res =
+      results.length === 1
+        ? results[0]
+        : {
+            isError: results.some((item) => item.isError),
+            text: results.map((item, idx) => `# Fable evaluator ${idx + 1}\n\n${item.text}`).join("\n\n---\n\n"),
+            rawText: results.map((item) => item.rawText || item.text).join("\n\n---\n\n"),
+            sessionId: results[0]?.sessionId || "",
+            effort: results[0]?.effort || "",
+            costUsd: results.reduce((sum, item) => sum + (typeof item.costUsd === "number" ? item.costUsd : 0), 0),
+          };
 
     if (loopMode && !res.isError) {
-      const m = [...res.text.matchAll(/<eval>([\s\S]*?)<\/eval>/g)].pop();
-      let ev = null;
-      if (m) {
-        try {
-          ev = JSON.parse(m[1].trim());
-        } catch {
-          /* パース失敗は下で処理 */
-        }
-      }
-      const rawScore = ev ? Number(ev.score) : NaN;
-      if (!ev || !Number.isFinite(rawScore)) {
+      const evals = results.map((item) => parseEval(item.text));
+      const ev = aggregateEvals(evals);
+      if (!ev) {
         res.isError = true;
         res.text +=
           "\n[fable-loop] 採点JSON (<eval>{...}</eval>) を取得できなかったため、state は更新していません。fable_review をもう一度呼んでください。";
       } else {
         // passed は Fable の自己申告ではなく、ここで機械的に確定する
-        const score = Math.max(0, Math.min(100, Math.floor(rawScore)));
+        const score = Math.max(0, Math.min(100, Math.floor(ev.score)));
         const threshold = Math.floor(state.threshold ?? 90);
         const passed = score >= threshold;
         const iter = Math.floor(state.iteration ?? 0);
         try {
+          const changedPaths = listChangedPaths(cwd);
+          mergeWriteTargets(state, changedPaths);
+          updateLoopCost(state, res);
+          const iterRef = createLoopSnapshot(cwd, loop, state, iter, score);
           writeFileSync(
-            join(loopDir(cwd), "turns", `turn-${String(iter).padStart(3, "0")}-eval.json`),
+            join(loop.turnsDir, `turn-${String(iter).padStart(3, "0")}-eval.json`),
             JSON.stringify(
-              { score, breakdown: ev.breakdown ?? {}, feedback: ev.feedback ?? "", passed, threshold, iteration: iter, evaluated_at: new Date().toISOString() },
+              {
+                score,
+                breakdown: ev.breakdown ?? {},
+                feedback: ev.feedback ?? "",
+                passed,
+                threshold,
+                iteration: iter,
+                evaluator_mode: evaluator_mode || "single",
+                ensemble_size: ev.ensemble_size || 1,
+                raw_scores: ev.raw_scores || [score],
+                changed_paths: changedPaths,
+                snapshot_ref: iterRef || "",
+                evaluated_at: new Date().toISOString(),
+              },
               null,
               2
             )
@@ -821,16 +1424,20 @@ ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : 
           state.iteration = iter + 1;
           state.score = score;
           state.passed = passed;
+          state.phase = passed ? "passed" : "active";
           if (score > (state.best_score ?? 0)) {
             state.best_score = score;
             state.best_iteration = iter;
+            markBestSnapshot(cwd, loop, state, iterRef);
           }
-          writeLoopState(cwd, state);
+          writeLoopState(loop, state);
           res.text +=
-            `\n[fable-loop] iteration ${iter + 1}/${state.max} | score ${score}/${threshold} (合否は server 側で機械判定) | ` +
+            `\n[fable-loop] loop_id ${loop.loopId} | iteration ${iter + 1}/${state.max} | score ${score}/${threshold} (合否は server 側で機械判定) | ` +
+            `cost total ~$${Number(state.cumulative_cost_usd || 0).toFixed(4)} | ` +
             (passed
               ? "✅ 合格 — ループはターン終了時に自動停止します"
-              : "❌ 未達 — feedback に従って修正し、再度 fable_review を呼んでください (state.json の直接編集は禁止)");
+              : "❌ 未達 — feedback に従って修正し、再度 fable_review を呼んでください (state.json の直接編集は禁止)") +
+            (state.best_snapshot_ref ? `\n[fable-loop] best snapshot: ${state.best_snapshot_ref}` : "");
         } catch (e) {
           res.text += `\n[fable-loop] state 更新に失敗しました: ${e.message}`;
         }

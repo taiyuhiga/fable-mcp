@@ -26,15 +26,15 @@ If you prefer a terminal one-liner, use the command for your OS:
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.6.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.0/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.6.2/install.ps1 | iex
+irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.0/install.ps1 | iex
 ```
 
-The installer checks Node.js, Codex CLI, and Claude Code CLI, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. Restart Codex when it finishes, then ask `Check the Fable status`.
+The installer checks Node.js, Codex CLI, and Claude Code CLI, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
 
 ```
 You -> Codex app (implementation agent)
@@ -72,7 +72,7 @@ Prerequisites:
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.6.2
+codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.0
 codex plugin add fable-mcp@fable-mcp
 ```
 
@@ -84,6 +84,14 @@ For local development, clone the repo and use:
 codex plugin marketplace add /ABSOLUTE/PATH/TO/fable-mcp
 codex plugin add fable-mcp@fable-mcp
 ```
+
+If you previously installed fable-mcp manually, remove the old manual entries after installing the plugin:
+
+- `[mcp_servers.fable]` in `~/.codex/config.toml`
+- `fable-loop-stop.mjs` in `~/.codex/hooks.json`
+- older Fable routing rules pasted into `~/.codex/AGENTS.md`
+
+Leaving them in place can double-register the MCP server or fire the Stop hook twice. `fable_status` reports these duplicate-registration risks locally.
 
 ## API Key And Billing
 
@@ -127,11 +135,20 @@ In Codex Plan mode, the plugin instructions tell Codex to call `fable_plan` unle
 | Tool | Purpose |
 |---|---|
 | `fable_status` | Local setup doctor: Claude Code CLI, auth/billing mode, effort, last saved Fable plan, quality-loop state. Does not call Fable. |
-| `fable_plan` | Read-only Fable planning before implementation. Saves the verbatim plan to `.fable/last-plan.md`. Can initialize a quality loop with `loop_threshold`. |
+| `fable_plan` | Read-only Fable planning before implementation. Saves the verbatim plan to `.fable/last-plan.md`. Can initialize a criteria-approval quality loop with `loop_threshold`. |
 | `fable_ask` | Fable-backed questions, tradeoff analysis, and brainstorming. |
-| `fable_review` | Read-only implementation review. In quality-loop mode, records Fable's score into `.fable-loop/state.json`. |
+| `fable_review` | Read-only implementation review. In quality-loop mode, records Fable's score, cumulative cost, and best snapshot into loop state. Supports optional ensemble scoring. |
+| `fable_loop_approve` | Activates a quality loop after the user approves the generated criteria. Local-only and free. |
+| `fable_loop_abort` | Safely aborts a quality loop without editing state files manually. Local-only and free. |
+| `fable_loop_restore_best` | Restores the highest-scoring git snapshot, limited to recorded write targets or explicit paths. Local-only and free. |
 
 `fable_plan`, `fable_ask`, and `fable_review` return a `session_id` footer. Pass it in the next call to continue the same Fable conversation.
+
+## Quality Loop Notes
+
+When `fable_plan` is called with `loop_threshold`, it creates a loop under `.fable-loop/sessions/<loop_id>/` and leaves it awaiting criteria approval by default. Codex should show the generated `criteria.md` to the user, then call `fable_loop_approve` before implementation/review starts. The old v0.6 `.fable-loop/state.json` layout is still read for compatibility.
+
+During review, fable-mcp parses Fable's `<eval>{...}</eval>` score, records cumulative cost, captures git snapshots under `refs/fable-loop/<loop_id>/...`, and marks the best-scoring snapshot for optional restore. If a rate-limit event appears in Claude Code's stream, the progress message says that Fable is rate-limited instead of looking frozen.
 
 ## Environment Variables
 

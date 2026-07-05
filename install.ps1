@@ -1,6 +1,6 @@
 param(
   [switch]$DryRun,
-  [string]$Ref = "v0.6.2",
+  [string]$Ref = "v0.7.0",
   [switch]$NoClaudeInstall,
   [switch]$NoApiKey
 )
@@ -34,6 +34,26 @@ function Invoke-Step {
   & $File @Arguments
   if ($LASTEXITCODE -ne 0) {
     throw "$File exited with code $LASTEXITCODE"
+  }
+}
+
+function Write-PreflightWarnings {
+  Write-Step "Preflight warnings"
+  Write-Warning "Close the Codex desktop app before running this installer. If Codex is open, it may overwrite config.toml when it exits."
+
+  $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
+  $config = Join-Path $codexHome "config.toml"
+  $hooks = Join-Path $codexHome "hooks.json"
+  $agents = Join-Path $codexHome "AGENTS.md"
+
+  if ((Test-Path $config) -and ((Get-Content -Raw -Path $config) -match '(?m)^\s*\[mcp_servers\.fable\]\s*$')) {
+    Write-Warning "Manual [mcp_servers.fable] already exists in $config. Remove it after plugin install to avoid double MCP registration."
+  }
+  if ((Test-Path $hooks) -and ((Get-Content -Raw -Path $hooks).Contains("fable-loop-stop.mjs"))) {
+    Write-Warning "Manual fable-loop Stop hook already exists in $hooks. Remove it after plugin install to avoid double hook execution."
+  }
+  if ((Test-Path $agents) -and ((Get-Content -Raw -Path $agents) -match 'Fable 5 Orchestration|Fable 5 オーケストレーション|fable_plan|fable_review')) {
+    Write-Warning "Global AGENTS.md appears to contain Fable routing rules. Prefer the plugin-bundled rules to avoid stale or duplicated instructions."
   }
 }
 
@@ -189,6 +209,7 @@ or log in/configure the claude CLI.
 "@
 }
 
+Write-PreflightWarnings
 Ensure-Node
 Ensure-Codex
 Ensure-Claude

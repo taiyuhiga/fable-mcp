@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REF="v0.6.2"
+REF="v0.7.0"
 REPO="taiyuhiga/fable-mcp"
 PLUGIN="fable-mcp@fable-mcp"
 DRY_RUN=0
@@ -13,11 +13,11 @@ usage() {
 Install fable-mcp for Codex.
 
 Usage:
-  ./install.sh [--dry-run] [--ref v0.6.2] [--no-claude-install] [--no-api-key]
+  ./install.sh [--dry-run] [--ref v0.7.0] [--no-claude-install] [--no-api-key]
 
 Options:
   --dry-run             Print commands without changing anything.
-  --ref <git-ref>       Git ref to install from. Default: v0.6.2.
+  --ref <git-ref>       Git ref to install from. Default: v0.7.0.
   --no-claude-install   Do not try to install Claude Code CLI automatically.
   --no-api-key          Do not prompt for ANTHROPIC_API_KEY.
 EOF
@@ -70,6 +70,27 @@ run() {
     printf '\n'
   else
     "$@"
+  fi
+}
+
+preflight_warnings() {
+  say "Preflight warnings"
+  warn "Close the Codex desktop app before running this installer. If Codex is open, it may overwrite config.toml when it exits."
+
+  local codex_home config hooks agents
+  codex_home="${CODEX_HOME:-$HOME/.codex}"
+  config="$codex_home/config.toml"
+  hooks="$codex_home/hooks.json"
+  agents="$codex_home/AGENTS.md"
+
+  if [ -f "$config" ] && grep -Eq '^\s*\[mcp_servers\.fable\]\s*$' "$config"; then
+    warn "Manual [mcp_servers.fable] already exists in $config. Remove it after plugin install to avoid double MCP registration."
+  fi
+  if [ -f "$hooks" ] && grep -Fq "fable-loop-stop.mjs" "$hooks"; then
+    warn "Manual fable-loop Stop hook already exists in $hooks. Remove it after plugin install to avoid double hook execution."
+  fi
+  if [ -f "$agents" ] && grep -Eq 'Fable 5 Orchestration|Fable 5 オーケストレーション|fable_plan|fable_review' "$agents"; then
+    warn "Global AGENTS.md appears to contain Fable routing rules. Prefer the plugin-bundled rules to avoid stale or duplicated instructions."
   fi
 }
 
@@ -204,6 +225,7 @@ or log in/configure the claude CLI.
 EOF
 }
 
+preflight_warnings
 ensure_node
 ensure_codex
 ensure_claude
