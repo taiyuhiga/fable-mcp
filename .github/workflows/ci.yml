@@ -29,8 +29,6 @@ jobs:
           bash -n install.sh
           bash -n scripts/codex-plugin-install-smoke.sh
           bash -n scripts/codex-live-trial.sh
-          python -m py_compile setup-all.py scripts/setup-all-smoke.py
-          python scripts/setup-all-smoke.py
           if command -v pwsh >/dev/null 2>&1; then
             pwsh -NoProfile -Command '$null = [scriptblock]::Create((Get-Content -Raw install.ps1))'
           else
@@ -46,17 +44,6 @@ jobs:
           test -f plugins/fable-mcp/hooks/fable-loop-stop.mjs
           test -f plugins/fable-mcp/hooks/fable-loop-prompt-submit.mjs
           test -f plugins/fable-mcp/dist/server.bundled.mjs
-          test -f .claude-plugin/marketplace.json
-          test -f plugins/fable-mcp-claude-code/.claude-plugin/plugin.json
-          test -f plugins/fable-mcp-claude-code/.mcp.json
-          test -f plugins/fable-mcp-claude-code/dist/server.bundled.mjs
-          test -f .cursor-plugin/marketplace.json
-          test -f plugins/fable-mcp-cursor/.cursor-plugin/plugin.json
-          test -f plugins/fable-mcp-cursor/mcp.json
-          test -f plugins/fable-mcp-cursor/dist/server.bundled.mjs
-          test -f plugins/fable-mcp-antigravity/plugin.json
-          test -f plugins/fable-mcp-antigravity/mcp_config.json
-          test -f plugins/fable-mcp-antigravity/dist/server.bundled.mjs
 
       - name: MCP handshake exposes all seven tools
         shell: bash

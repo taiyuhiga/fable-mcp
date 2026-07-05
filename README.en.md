@@ -8,7 +8,7 @@ Japanese README: [README.md](README.md)
 
 ## Easiest Setup: One Sentence
 
-For beginners, the easiest path is to paste this one sentence into Codex, Claude Code, or another local AI coding agent. You do not need to clone the repository manually or fill the custom MCP form yourself.
+For beginners, the easiest path is to paste this one sentence into Codex. You do not need to clone the repository manually or fill the custom MCP form yourself.
 
 ```text
 Set up https://github.com/taiyuhiga/fable-mcp.
@@ -17,45 +17,27 @@ Set up https://github.com/taiyuhiga/fable-mcp.
 When an AI agent receives that sentence, it should treat this README plus `AGENTS.md` as the setup contract and complete the setup instead of stopping at a summary:
 
 1. Check that Node.js 18+ is installed
-2. Install Claude Code CLI with `npm i -g @anthropic-ai/claude-code` if it is missing
-3. Clone this repository and run `python3 setup-all.py`
-4. Set up every available client:
-   - Codex: Codex Plugin
-   - Claude Code: Claude Code Plugin
-   - Cursor: Cursor local plugin
-   - Antigravity: Antigravity local plugin
-5. Ask me only when ANTHROPIC_API_KEY is needed
+2. Install Claude Code CLI with npm i -g @anthropic-ai/claude-code if it is missing
+3. Install the fable-mcp Codex Plugin
+4. Ask me only when ANTHROPIC_API_KEY is needed
+5. Verify that fable appears in codex mcp list
 6. Leave me ready to ask: Check the Fable status
 
-The Claude Code CLI is still required as the local Fable 5 runner. Even Cursor, Codex, and Antigravity use it underneath to start Fable in headless plan mode.
+This repository is distributed as a Codex Plugin. Claude Code CLI is still used as the internal headless runtime for Fable calls, but this repository does not distribute Claude Code, Cursor, or Antigravity plugins/MCP setup.
 
-If you prefer the terminal, clone the repo and run the all-client setup:
+If you prefer a terminal one-liner, use the command for your OS:
 
 ```sh
 # macOS / Linux
-git clone https://github.com/taiyuhiga/fable-mcp.git
-cd fable-mcp
-python3 setup-all.py
+curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.7/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell
-git clone https://github.com/taiyuhiga/fable-mcp.git
-cd fable-mcp
-python setup-all.py
+irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.7/install.ps1 | iex
 ```
 
-`setup-all.py` checks Node.js and Claude Code CLI, then registers or installs plugins for the clients it can find. Restart the relevant app after it finishes and ask `Check the Fable status`.
-
-Codex-only convenience installers still exist:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.6/install.sh | bash
-```
-
-```powershell
-irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.6/install.ps1 | iex
-```
+The installer checks Node.js, Codex CLI, and Claude Code CLI, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
 
 ```
 You -> Codex app (implementation agent)
@@ -82,7 +64,7 @@ claude -p --model claude-fable-5 --permission-mode plan --output-format stream-j
 - Tool calls are separate Claude Code processes. For follow-up brainstorming, pass the previous response's `session_id`; fable-mcp resumes the same Claude Code conversation with `--resume`.
 - If `ANTHROPIC_API_KEY` is set, calls use Anthropic API metered billing. Otherwise they use the current `claude` CLI login/session if available.
 
-## Recommended Setup: Plugins
+## Recommended Setup: Codex Plugin
 
 Prerequisites:
 
@@ -90,29 +72,10 @@ Prerequisites:
 - Claude Code CLI: `npm i -g @anthropic-ai/claude-code`
 - Optional but recommended: an Anthropic API key with billing enabled
 
-For Codex / Claude Code / Cursor / Antigravity together, run:
-
-```sh
-python3 setup-all.py
-```
-
-Client distribution formats:
-
-| Client | Format | Setup target |
-|---|---|---|
-| Codex | Codex Plugin | `codex plugin marketplace add ...` + `codex plugin add ...` |
-| Claude Code | Claude Code Plugin | `.claude-plugin/marketplace.json` |
-| Cursor | Cursor Plugin | `~/.cursor/plugins/local/fable-mcp` |
-| Antigravity | Antigravity Plugin | `~/.gemini/config/plugins/fable-mcp` |
-
-Publishing to the public Cursor Marketplace is a separate review/submission step. This repo already includes `.cursor-plugin/marketplace.json` and `plugins/fable-mcp-cursor/` so local and team distribution can start immediately.
-
-### Codex Plugin
-
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.6
+codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.7
 codex plugin add fable-mcp@fable-mcp
 ```
 
