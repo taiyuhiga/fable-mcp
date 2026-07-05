@@ -55,6 +55,7 @@ jobs:
           grep -q fable_ask out.json
           grep -q fable_review out.json
           grep -q "fable-mcp status" out.json
+          grep -q "## Next Actions" out.json
           grep -q "does not call Fable" out.json
           echo "handshake OK"
 

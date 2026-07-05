@@ -26,7 +26,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const VERSION = "0.6.1";
+const VERSION = "0.6.2";
 const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
 const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
@@ -457,21 +457,66 @@ function safeReadJson(path) {
   }
 }
 
-function loopStatusLines(cwd) {
+function readLoopSnapshot(cwd) {
   const statePath = join(loopDir(cwd), "state.json");
-  if (!existsSync(statePath)) return ["- quality loop: inactive (.fable-loop/state.json not found)"];
+  if (!existsSync(statePath)) return { exists: false, statePath };
   const state = safeReadJson(statePath);
-  if (!state) return [`- quality loop: state exists but is not valid JSON (${statePath})`];
+  if (!state) return { exists: true, valid: false, statePath };
   const threshold = Math.floor(state.threshold ?? 90);
   const iteration = Math.floor(state.iteration ?? 0);
   const max = Number.isFinite(Number(state.max)) ? Math.floor(Number(state.max)) : "unknown";
   const score = Number.isFinite(Number(state.score)) ? Math.floor(Number(state.score)) : "unknown";
   const active = Boolean(state.active);
   const passed = Boolean(state.passed) || (Number.isFinite(Number(score)) && score >= threshold);
+  return { exists: true, valid: true, statePath, threshold, iteration, max, score, active, passed };
+}
+
+function loopStatusLines(loop) {
+  if (!loop.exists) return ["- quality loop: inactive (.fable-loop/state.json not found)"];
+  if (!loop.valid) return [`- quality loop: state exists but is not valid JSON (${loop.statePath})`];
   return [
-    `- quality loop: ${active ? "active" : "inactive"} | iteration ${iteration}/${max} | score ${score}/${threshold} | passed: ${passed ? "yes" : "no"}`,
-    `- quality loop state: ${statePath}`,
+    `- quality loop: ${loop.active ? "active" : "inactive"} | iteration ${loop.iteration}/${loop.max} | score ${loop.score}/${loop.threshold} | passed: ${loop.passed ? "yes" : "no"}`,
+    `- quality loop state: ${loop.statePath}`,
   ];
+}
+
+function nextActionLines({ claude, hasApiKey, effort, timeoutValid, maxTurnsValid, lastPlanExists, loop }) {
+  const actions = [];
+
+  if (!claude.ok) {
+    actions.push("1. Install Claude Code CLI: `npm i -g @anthropic-ai/claude-code`, then restart Codex and run `Fableの状態を確認して` again.");
+  }
+  if (!hasApiKey) {
+    actions.push(
+      `${actions.length + 1}. If you want Anthropic API billing, add ` +
+        "`ANTHROPIC_API_KEY` under `[plugins.\"fable-mcp@fable-mcp\".mcp_servers.fable.env]`; otherwise run `claude` once to confirm CLI login, then try `Fable5に聞いて: このリポジトリは何をするもの?`."
+    );
+  }
+  if (!timeoutValid || !maxTurnsValid) {
+    actions.push(`${actions.length + 1}. Fix invalid numeric env vars: FABLE_TIMEOUT_MS and FABLE_MAX_TURNS must be numbers.`);
+  }
+  if (effort === "xhigh" || effort === "max") {
+    actions.push(`${actions.length + 1}. Cost check: FABLE_EFFORT=${effort}. Prefer per-call max/xhigh only when the user explicitly asks for deep reasoning.`);
+  }
+
+  if (loop.exists && !loop.valid) {
+    actions.push(`${actions.length + 1}. Inspect ${loop.statePath}; the quality-loop state JSON is invalid.`);
+  } else if (loop.valid && loop.active && !loop.passed) {
+    actions.push(`${actions.length + 1}. Quality loop is active. Implement the latest feedback, then call ` + "`fable_review` again.");
+  } else if (loop.valid && loop.active && loop.passed) {
+    actions.push(`${actions.length + 1}. Quality loop has passed. Finish by summarizing the result or committing the verified changes.`);
+  }
+
+  if (actions.length === 0) {
+    actions.push("1. Setup looks ready. Try: `Fable5に聞いて: このリポジトリは何をするもの?`");
+    actions.push("2. For implementation work, enter Codex Plan mode or ask: `Fableでプラン作って`.");
+  } else if (claude.ok && hasApiKey && !lastPlanExists && !(loop.valid && loop.active)) {
+    actions.push(`${actions.length + 1}. After the setup warning is resolved, try: ` + "`Fable5に聞いて: このリポジトリは何をするもの?`");
+  } else if (lastPlanExists && !(loop.valid && loop.active && !loop.passed)) {
+    actions.push(`${actions.length + 1}. A saved Fable plan exists. Read ` + "`.fable/last-plan.md`, implement it, then call `fable_review`.");
+  }
+
+  return actions;
 }
 
 function statusText(cwd) {
@@ -479,14 +524,18 @@ function statusText(cwd) {
   const claude = probeClaudeCli();
   const hasApiKey = Boolean(process.env.ANTHROPIC_API_KEY);
   const effort = EFFORT || "default(high)";
+  const timeoutValid = Number.isFinite(TIMEOUT_MS);
+  const maxTurnsValid = Number.isFinite(MAX_TURNS);
   const warnings = [];
   if (!claude.ok) warnings.push(`claude CLI is not ready (${claude.detail}). Install with: npm i -g @anthropic-ai/claude-code`);
   if (!hasApiKey) warnings.push("ANTHROPIC_API_KEY is not set. Calls will use the current claude CLI login/session if available.");
   if (EFFORT === "xhigh" || EFFORT === "max") warnings.push(`FABLE_EFFORT=${EFFORT} is expensive. Prefer per-call effort=max only when the user explicitly asks.`);
-  if (!Number.isFinite(TIMEOUT_MS)) warnings.push("FABLE_TIMEOUT_MS is invalid.");
-  if (!Number.isFinite(MAX_TURNS)) warnings.push("FABLE_MAX_TURNS is invalid.");
+  if (!timeoutValid) warnings.push("FABLE_TIMEOUT_MS is invalid.");
+  if (!maxTurnsValid) warnings.push("FABLE_MAX_TURNS is invalid.");
 
   const lastPlan = join(fableDir(projectCwd), "last-plan.md");
+  const lastPlanExists = existsSync(lastPlan);
+  const loop = readLoopSnapshot(projectCwd);
   const authMode = hasApiKey
     ? "ANTHROPIC_API_KEY present: Anthropic API metered billing"
     : "no ANTHROPIC_API_KEY: claude CLI login/session, if available";
@@ -512,8 +561,11 @@ function statusText(cwd) {
     `- timeout per call: ${formatDuration(TIMEOUT_MS)}`,
     "",
     "## Project Files",
-    `- last verbatim Fable plan: ${existsSync(lastPlan) ? lastPlan : "not found yet (.fable/last-plan.md will be created by fable_plan)"}`,
-    ...loopStatusLines(projectCwd),
+    `- last verbatim Fable plan: ${lastPlanExists ? lastPlan : "not found yet (.fable/last-plan.md will be created by fable_plan)"}`,
+    ...loopStatusLines(loop),
+    "",
+    "## Next Actions",
+    ...nextActionLines({ claude, hasApiKey, effort: EFFORT, timeoutValid, maxTurnsValid, lastPlanExists, loop }),
     "",
     "## Notes",
     "- This status check is local-only. It does not call Fable and does not spend API credits.",
