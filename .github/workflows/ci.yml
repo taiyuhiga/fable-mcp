@@ -23,12 +23,14 @@ jobs:
       - run: npm run check
       - run: npm run smoke
       - run: npm run codex-smoke
+      - run: npm run agent-smoke
       - name: Installer scripts parse
         shell: bash
         run: |
           bash -n install.sh
           bash -n scripts/codex-plugin-install-smoke.sh
           bash -n scripts/codex-live-trial.sh
+          node scripts/run-python.mjs -m py_compile scripts/setup-current-agent.py scripts/setup-current-agent-smoke.py
           if command -v pwsh >/dev/null 2>&1; then
             pwsh -NoProfile -Command '$null = [scriptblock]::Create((Get-Content -Raw install.ps1))'
           else
@@ -44,6 +46,17 @@ jobs:
           test -f plugins/fable-mcp/hooks/fable-loop-stop.mjs
           test -f plugins/fable-mcp/hooks/fable-loop-prompt-submit.mjs
           test -f plugins/fable-mcp/dist/server.bundled.mjs
+          test -f .cursor-plugin/marketplace.json
+          test -f plugins/fable-mcp-cursor/.cursor-plugin/plugin.json
+          test -f plugins/fable-mcp-cursor/mcp.json
+          test -f plugins/fable-mcp-cursor/dist/server.bundled.mjs
+          test -f plugins/fable-mcp-antigravity/plugin.json
+          test -f plugins/fable-mcp-antigravity/mcp_config.json
+          test -f plugins/fable-mcp-antigravity/dist/server.bundled.mjs
+          test ! -e .claude-plugin/marketplace.json
+          test ! -e claude-code/.claude-plugin/marketplace.json
+          test ! -e plugins/fable-mcp-claude-code
+          test ! -e setup-all.py
 
       - name: MCP handshake exposes all seven tools
         shell: bash

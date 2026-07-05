@@ -1,0 +1,7 @@
+---
+description: Route explicit Fable requests through fable-mcp.
+---
+
+When the user mentions Fable, Fable5, Feyble, or フェイブル, use the fable MCP server before implementing.
+
+Use `fable_status` for setup checks, `fable_plan` for design, `fable_ask` for questions, and `fable_review` for review. Relay Fable output verbatim.

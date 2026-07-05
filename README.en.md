@@ -2,45 +2,59 @@
 
 [![CI](https://github.com/taiyuhiga/fable-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/taiyuhiga/fable-mcp/actions/workflows/ci.yml)
 
-Use Claude Fable 5 as a read-only deep-reasoning architect and evaluator from OpenAI Codex.
+Use Claude Fable 5 as a read-only deep-reasoning architect and evaluator from Codex, Cursor, or Antigravity.
 
 Japanese README: [README.md](README.md)
 
 ## Easiest Setup: One Sentence
 
-For beginners, the easiest path is to paste this one sentence into Codex. You do not need to clone the repository manually or fill the custom MCP form yourself.
+For beginners, the easiest path is to paste this one sentence into the AI agent you want to use. You do not need to clone the repository manually or fill the custom MCP form yourself.
 
 ```text
 Set up https://github.com/taiyuhiga/fable-mcp.
 ```
 
-When an AI agent receives that sentence, it should treat this README plus `AGENTS.md` as the setup contract and complete the setup instead of stopping at a summary:
+When an AI agent receives that sentence, it should treat this README plus `AGENTS.md` as the setup contract and configure only its own client. If Codex receives the request, configure Codex only. If Cursor receives it, configure Cursor only. If Antigravity receives it, configure Antigravity only.
 
 1. Check that Node.js 18+ is installed
-2. Install Claude Code CLI with npm i -g @anthropic-ai/claude-code if it is missing
-3. Install the fable-mcp Codex Plugin
+2. Install only the fable-mcp plugin/MCP config for the requesting client
+3. Check whether Claude Code CLI (`claude`) exists as the Fable runtime, but do not install it unless the user explicitly asks
 4. Ask me only when ANTHROPIC_API_KEY is needed
-5. Verify that fable appears in codex mcp list
-6. Leave me ready to ask: Check the Fable status
+5. Leave me ready to ask: Check the Fable status
 
-This repository is distributed as a Codex Plugin. Claude Code CLI is still used as the internal headless runtime for Fable calls, but this repository does not distribute Claude Code, Cursor, or Antigravity plugins/MCP setup.
+This repository ships a Codex Plugin, a Cursor Plugin, and an Antigravity Plugin. Setup is intentionally single-client: it does not fan out into other AI agents. Claude Code CLI is only the optional headless runtime used for Fable calls; it is not treated as another host agent to set up.
 
-If you prefer a terminal one-liner, use the command for your OS:
+If you want to set up Codex from a terminal, use the command for your OS:
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.7/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.0/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.7/install.ps1 | iex
+irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.0/install.ps1 | iex
 ```
 
-The installer checks Node.js, Codex CLI, and Claude Code CLI, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
+The installer checks Node.js, Codex CLI, and the Claude Code CLI runtime, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. It does not install Claude Code CLI unless you explicitly pass the runtime-install flag. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
+
+For Cursor or Antigravity manual setup:
+
+```sh
+git clone https://github.com/taiyuhiga/fable-mcp.git
+cd fable-mcp
+npm install
+npm run build
+
+# Configure Cursor only
+node scripts/run-python.mjs scripts/setup-current-agent.py --client cursor
+
+# Configure Antigravity only
+node scripts/run-python.mjs scripts/setup-current-agent.py --client antigravity
+```
 
 ```
-You -> Codex app (implementation agent)
+You -> Codex / Cursor / Antigravity (implementation agent)
           |
           | calls MCP tools when planning/review needs deeper reasoning
           v
@@ -48,7 +62,7 @@ You -> Codex app (implementation agent)
                        |
                        | reads the repository and thinks through the design
                        v
-                    plan/review back to Codex -> Codex implements
+                    plan/review back to host agent -> host agent implements
 ```
 
 ## What Happens On The Claude Code Side
@@ -60,22 +74,26 @@ claude -p --model claude-fable-5 --permission-mode plan --output-format stream-j
 ```
 
 - `--permission-mode plan` lets Fable read the local project for planning/review, but it cannot edit files.
-- Codex remains responsible for implementation, tests, commits, and releases.
+- The host agent remains responsible for implementation, tests, commits, and releases.
 - Tool calls are separate Claude Code processes. For follow-up brainstorming, pass the previous response's `session_id`; fable-mcp resumes the same Claude Code conversation with `--resume`.
 - If `ANTHROPIC_API_KEY` is set, calls use Anthropic API metered billing. Otherwise they use the current `claude` CLI login/session if available.
 
-## Recommended Setup: Codex Plugin
+## Setup
+
+Configure only the client that received the setup request.
+
+## Codex Plugin
 
 Prerequisites:
 
 - Node.js 18+
-- Claude Code CLI: `npm i -g @anthropic-ai/claude-code`
+- Claude Code CLI runtime, optional until the first Fable call: `npm i -g @anthropic-ai/claude-code`
 - Optional but recommended: an Anthropic API key with billing enabled
 
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.7
+codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.8.0
 codex plugin add fable-mcp@fable-mcp
 ```
 
@@ -95,6 +113,26 @@ If you previously installed fable-mcp manually, remove the old manual entries af
 - older Fable routing rules pasted into `~/.codex/AGENTS.md`
 
 Leaving them in place can double-register the MCP server or fire the Stop hook twice. `fable_status` reports these duplicate-registration risks locally.
+
+## Cursor Plugin
+
+Cursor plugin files live in `.cursor-plugin/marketplace.json` and `plugins/fable-mcp-cursor/`. If Cursor receives the GitHub setup request, it should run:
+
+```sh
+node scripts/run-python.mjs scripts/setup-current-agent.py --client cursor
+```
+
+The script copies the plugin to `~/.cursor/plugins/local/fable-mcp` and updates only Cursor's `~/.cursor/mcp.json` entry for `fable`.
+
+## Antigravity Plugin
+
+Antigravity plugin files live in `plugins/fable-mcp-antigravity/`. If Antigravity receives the GitHub setup request, it should run:
+
+```sh
+node scripts/run-python.mjs scripts/setup-current-agent.py --client antigravity
+```
+
+The script copies the plugin to `~/.gemini/config/plugins/fable-mcp` and rewrites only that plugin's `mcp_config.json`.
 
 ## API Key And Billing
 
@@ -117,13 +155,13 @@ If `ANTHROPIC_API_KEY` is not set, the underlying `claude` CLI decides which log
 
 ## Verify The Install
 
-In a new Codex thread, ask:
+In a new thread in the configured host agent, ask:
 
 ```text
 Check the Fable status
 ```
 
-Codex should call `fable_status`. This is local-only and does not spend API credits.
+The host agent should call `fable_status`. This is local-only and does not spend API credits.
 
 Then test a real Fable call:
 

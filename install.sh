@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REF="v0.7.7"
+REF="v0.8.0"
 REPO="taiyuhiga/fable-mcp"
 PLUGIN="fable-mcp@fable-mcp"
 DRY_RUN=0
-INSTALL_CLAUDE=1
+INSTALL_CLAUDE=0
 ASK_API_KEY=1
 
 usage() {
@@ -13,12 +13,15 @@ usage() {
 Install fable-mcp for Codex.
 
 Usage:
-  ./install.sh [--dry-run] [--ref v0.7.7] [--no-claude-install] [--no-api-key]
+  ./install.sh [--dry-run] [--ref v0.8.0] [--install-claude-runtime] [--no-api-key]
 
 Options:
   --dry-run             Print commands without changing anything.
-  --ref <git-ref>       Git ref to install from. Default: v0.7.7.
-  --no-claude-install   Do not try to install Claude Code CLI automatically.
+  --ref <git-ref>       Git ref to install from. Default: v0.8.0.
+  --install-claude-runtime
+                        Install Claude Code CLI if missing. Off by default so
+                        Codex setup does not also set up Claude Code unless
+                        the user explicitly asks.
   --no-api-key          Do not prompt for ANTHROPIC_API_KEY.
 EOF
 }
@@ -31,7 +34,8 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -gt 0 ] || { echo "missing value for --ref" >&2; exit 2; }
       REF="$1"
       ;;
-    --no-claude-install) INSTALL_CLAUDE=0 ;;
+    --install-claude-runtime) INSTALL_CLAUDE=1 ;;
+    --no-claude-install) INSTALL_CLAUDE=0 ;; # kept for old docs/scripts
     --no-api-key) ASK_API_KEY=0 ;;
     -h|--help)
       usage
@@ -124,7 +128,8 @@ ensure_claude() {
   fi
 
   if [ "$INSTALL_CLAUDE" -ne 1 ]; then
-    warn "claude CLI not found. Install later with: npm i -g @anthropic-ai/claude-code"
+    warn "claude CLI not found. This installer configures only Codex, but Fable calls need the Claude Code CLI runtime."
+    warn "Install it separately only if you want this machine to call Fable: npm i -g @anthropic-ai/claude-code"
     return
   fi
 
@@ -215,8 +220,8 @@ print_next_steps() {
 
 Next steps:
 Installed/checked:
-- Claude Code CLI: used by fable-mcp to start Fable 5 in headless plan mode.
 - Codex Plugin/MCP: registers the fable MCP server for Codex.
+- Claude Code CLI runtime: checked only. It is not installed unless --install-claude-runtime was passed.
 
 1. Restart the Codex app.
 2. If Codex asks whether to trust the bundled Stop hook, approve it.
@@ -224,8 +229,12 @@ Installed/checked:
 
    Fableの状態を確認して
 
+If the status says the claude CLI is missing, install the runtime separately with:
+
+   npm i -g @anthropic-ai/claude-code
+
 If the status says ANTHROPIC_API_KEY is missing, either add it to ~/.codex/config.toml
-or log in/configure the claude CLI.
+or log in/configure the claude CLI runtime.
 EOF
 }
 

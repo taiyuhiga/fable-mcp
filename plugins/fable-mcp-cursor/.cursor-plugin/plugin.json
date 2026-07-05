@@ -1,0 +1,13 @@
+{
+  "name": "fable-mcp",
+  "displayName": "Fable MCP",
+  "version": "0.8.0",
+  "description": "Use Claude Fable 5 as a read-only deep reasoning architect and evaluator from Cursor.",
+  "author": {
+    "name": "Taiyu Higa"
+  },
+  "homepage": "https://github.com/taiyuhiga/fable-mcp",
+  "repository": "https://github.com/taiyuhiga/fable-mcp",
+  "license": "MIT",
+  "keywords": ["fable", "mcp", "planning", "review", "eval-loop"]
+}

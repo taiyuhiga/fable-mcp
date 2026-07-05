@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "fable": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["dist/server.bundled.mjs"],
+      "env": {
+        "ANTHROPIC_API_KEY": "${env:ANTHROPIC_API_KEY}",
+        "FABLE_MODEL": "${env:FABLE_MODEL}",
+        "FABLE_EFFORT": "${env:FABLE_EFFORT}",
+        "FABLE_MAX_TURNS": "${env:FABLE_MAX_TURNS}",
+        "FABLE_TIMEOUT_MS": "${env:FABLE_TIMEOUT_MS}",
+        "FABLE_CLAUDE_BIN": "${env:FABLE_CLAUDE_BIN}"
+      }
+    }
+  }
+}

@@ -6,30 +6,50 @@ If the user gives you only this request:
 https://github.com/taiyuhiga/fable-mcp をセットアップして。
 ```
 
-treat it as a request to complete the full local setup. Do not stop at a README summary.
+treat it as a request to complete the setup for the AI agent/client that received the request. Do not stop at a README summary. Do not set up every supported client.
 
-What "setup" means:
+Single-client policy:
+
+- If this request is running in Codex, set up Codex only.
+- If this request is running in Cursor, set up Cursor only.
+- If this request is running in Antigravity, set up Antigravity only.
+- Never configure Codex, Cursor, and Antigravity together unless the user explicitly asks for multiple named clients.
+- Do not install a Claude Code plugin/client as part of Codex, Cursor, or Antigravity setup. Claude Code CLI is only the optional headless runtime used by fable-mcp to call Fable.
+
+What "setup" means for all clients:
 
 1. Confirm Node.js 18+ is available.
-2. Confirm the `codex` CLI is available. If it is missing, tell the user they need Codex installed/opened first.
-3. Confirm the Claude Code CLI (`claude`) is available; install it with `npm i -g @anthropic-ai/claude-code` when possible.
-4. Install the Codex plugin with `codex plugin marketplace add ...` and `codex plugin add fable-mcp@fable-mcp`.
-5. Ask the user for `ANTHROPIC_API_KEY` only when needed; never invent or require a key if they prefer Claude CLI login.
-6. Verify with `codex mcp list` that `fable` is registered.
-7. Tell the user to restart the Codex desktop app and then ask `Fableの状態を確認して`.
+2. Confirm whether the Claude Code CLI runtime (`claude`) is available. Do not auto-install it unless the user explicitly asks. If missing, explain that Fable calls need this runtime and give: `npm i -g @anthropic-ai/claude-code`.
+3. Ask the user for `ANTHROPIC_API_KEY` only when needed; never invent or require a key if they prefer Claude CLI login.
+4. Install only the selected host client below.
+5. Tell the user to restart that host client and then ask `Fableの状態を確認して`.
 
-Do not install or generate Claude Code, Cursor, or Antigravity plugin/MCP configuration. Claude Code CLI is only the headless runtime used by the Codex plugin.
-
-Recommended commands from a cloned checkout:
+Codex setup only:
 
 ```sh
-# macOS / Linux
 bash install.sh
 ```
 
-```powershell
-# Windows PowerShell
-.\install.ps1
+or:
+
+```sh
+node scripts/run-python.mjs scripts/setup-current-agent.py --client codex
 ```
 
-The installer sets up both sides: Claude Code CLI for the Fable headless process and the Codex plugin/MCP registration for Codex.
+Cursor setup only:
+
+```sh
+node scripts/run-python.mjs scripts/setup-current-agent.py --client cursor
+```
+
+Antigravity setup only:
+
+```sh
+node scripts/run-python.mjs scripts/setup-current-agent.py --client antigravity
+```
+
+PowerShell Codex-only setup:
+
+```powershell
+.\install.ps1
+```
