@@ -1,6 +1,6 @@
 param(
   [switch]$DryRun,
-  [string]$Ref = "v0.8.1",
+  [string]$Ref = "v0.8.2",
   [switch]$NoClaudeInstall,
   [switch]$InstallClaudeRuntime,
   [switch]$NoApiKey

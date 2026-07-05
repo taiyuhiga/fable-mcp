@@ -15,11 +15,13 @@ def run_client(client, assert_fn):
     with tempfile.TemporaryDirectory(prefix=f"fable-{client}-setup-") as tmp:
         env = os.environ.copy()
         env["FABLE_MCP_HOME"] = tmp
+        env["PYTHONIOENCODING"] = "utf-8"
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--client", client, "--skip-runtime-check"],
             cwd=ROOT,
             env=env,
             text=True,
+            encoding="utf-8",
             capture_output=True,
         )
         if result.returncode != 0:

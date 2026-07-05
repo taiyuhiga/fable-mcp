@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REF="v0.8.1"
+REF="v0.8.2"
 REPO="taiyuhiga/fable-mcp"
 PLUGIN="fable-mcp@fable-mcp"
 DRY_RUN=0
@@ -13,11 +13,11 @@ usage() {
 Install fable-mcp for Codex.
 
 Usage:
-  ./install.sh [--dry-run] [--ref v0.8.1] [--install-claude-runtime] [--no-api-key]
+  ./install.sh [--dry-run] [--ref v0.8.2] [--install-claude-runtime] [--no-api-key]
 
 Options:
   --dry-run             Print commands without changing anything.
-  --ref <git-ref>       Git ref to install from. Default: v0.8.1.
+  --ref <git-ref>       Git ref to install from. Default: v0.8.2.
   --install-claude-runtime
                         Install Claude Code CLI if missing. Off by default so
                         Codex setup does not also set up Claude Code unless
