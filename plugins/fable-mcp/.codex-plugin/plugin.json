@@ -1,0 +1,43 @@
+{
+  "name": "fable-mcp",
+  "version": "0.5.0",
+  "description": "Use Claude Fable 5 as a deep-reasoning architect and evaluator inside OpenAI Codex.",
+  "author": {
+    "name": "Taiyu Higa",
+    "url": "https://github.com/taiyuhiga"
+  },
+  "homepage": "https://github.com/taiyuhiga/fable-mcp",
+  "repository": "https://github.com/taiyuhiga/fable-mcp",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "mcp",
+    "fable",
+    "claude",
+    "planning",
+    "eval-loop"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Fable MCP",
+    "shortDescription": "Fable 5 planning, review, and eval-loop tools for Codex",
+    "longDescription": "Fable MCP lets Codex consult Claude Fable 5 as a read-only architect and evaluator. It provides deep planning, Fable-backed answers, implementation review, and a Stop-hook-driven quality loop that keeps iterating until a score threshold or max iteration count is reached.",
+    "developerName": "Taiyu Higa",
+    "category": "Developer Tools",
+    "capabilities": [
+      "MCP tools",
+      "Plan mode orchestration",
+      "Quality loop",
+      "Stop hook",
+      "Read-only repository exploration"
+    ],
+    "websiteURL": "https://github.com/taiyuhiga/fable-mcp",
+    "defaultPrompt": [
+      "Fable5にこの設計をレビューさせて",
+      "Plan mode: use Fable to plan this change",
+      "90点合格まで品質ループで仕上げて"
+    ],
+    "brandColor": "#6D5EF6"
+  }
+}

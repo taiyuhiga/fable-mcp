@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "fable": {
+      "command": "node",
+      "args": ["./dist/server.bundled.mjs"],
+      "cwd": ".",
+      "startup_timeout_sec": 60,
+      "tool_timeout_sec": 1200,
+      "env_vars": [
+        "ANTHROPIC_API_KEY",
+        "FABLE_MODEL",
+        "FABLE_EFFORT",
+        "FABLE_MAX_TURNS",
+        "FABLE_TIMEOUT_MS",
+        "FABLE_CLAUDE_BIN"
+      ]
+    }
+  }
+}

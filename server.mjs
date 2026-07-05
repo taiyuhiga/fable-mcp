@@ -25,7 +25,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
 const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
@@ -38,6 +38,23 @@ const MODEL_RE = /^[\w.:-]+$/;
 const SESSION_ID_RE = /^[0-9a-fA-F][0-9a-fA-F-]{7,63}$/;
 
 const log = (...args) => console.error("[fable-mcp]", ...args);
+
+const FABLE_MCP_INSTRUCTIONS = `
+Use Fable 5 as the external deep-reasoning architect/evaluator.
+
+Routing:
+- In Codex Plan mode, call fable_plan first unless the user explicitly says "without Fable" / "Fableなし".
+- In normal mode, call Fable only when the user mentions Fable/Fable5/Feyble/フェイブル, or asks for a quality loop.
+- For "合格まで回して", "N点まで", or "loop/eval-loop", call fable_plan with loop_threshold, implement, then call fable_review.
+
+Relay:
+- Fable output is canonical. Present plans, answers, and reviews verbatim. Do not summarize, rename sections, or reformat into Summary/Key Changes.
+- In Plan mode, copy the Fable plan into the proposed plan body as-is; put any Codex changes after it under "Fableプランからの変更点".
+
+Continuation:
+- Pass the returned session_id for follow-up questions in the same Fable conversation.
+- If the user says max/deep/じっくり, pass effort=max or xhigh; if they say quick/light/軽く, pass effort=medium.
+`.trim();
 
 /**
  * claude バイナリの解決順:
@@ -339,7 +356,10 @@ function makeProgressReporter(extra) {
   };
 }
 
-const server = new McpServer({ name: "fable-mcp", version: VERSION });
+const server = new McpServer(
+  { name: "fable-mcp", version: VERSION },
+  { instructions: FABLE_MCP_INSTRUCTIONS }
+);
 
 server.tool(
   "fable_plan",

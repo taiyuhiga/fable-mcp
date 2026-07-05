@@ -1,0 +1,20 @@
+{
+  "name": "fable-mcp",
+  "interface": {
+    "displayName": "Fable MCP"
+  },
+  "plugins": [
+    {
+      "name": "fable-mcp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/fable-mcp"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

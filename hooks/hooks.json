@@ -1,0 +1,31 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-fable-instructions.mjs\"",
+            "commandWindows": "node \"%CLAUDE_PLUGIN_ROOT%\\hooks\\inject-fable-instructions.mjs\"",
+            "timeout": 30,
+            "statusMessage": "Loading Fable orchestration rules"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/fable-loop-stop.mjs\"",
+            "commandWindows": "node \"%CLAUDE_PLUGIN_ROOT%\\hooks\\fable-loop-stop.mjs\"",
+            "timeout": 30,
+            "statusMessage": "Checking Fable quality loop"
+          }
+        ]
+      }
+    ]
+  }
+}
