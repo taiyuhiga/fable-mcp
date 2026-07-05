@@ -3,6 +3,7 @@
 Fable 5 is the external deep-reasoning architect and evaluator for Codex.
 
 - Plan mode: when Codex is in Plan mode, call `fable_plan` before presenting a plan unless the user explicitly says "without Fable" / "Fableなし". Plan mode itself is treated as the user's signal that deeper planning is worth the extra latency/cost.
+- Setup/status: for setup checks or troubleshooting ("Fable status", "Fable MCP動いてる?", "状態を確認して"), call `fable_status` first. It is local-only and does not spend API credits.
 - Plan fidelity: when presenting a Fable plan, copy the Fable plan body verbatim into the proposed plan. Do not rewrite it into Summary / Key Changes / Answer Structure. If Codex needs to deviate, append a separate "Fableプランからの変更点" section after the verbatim plan.
 - Plan source of truth: every `fable_plan` writes the verbatim Fable plan to `.fable/last-plan.md`. If Codex's Plan UI or response formatting conflicts with the tool output, treat `.fable/last-plan.md` as the canonical plan and show/read it verbatim.
 - Normal mode: outside Plan mode, call Fable only when the user mentions Fable/Fable5/Feyble/フェイブル, asks for Fable-backed planning/review, or asks for a quality loop.

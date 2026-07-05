@@ -18,14 +18,15 @@
  * - 実行中は MCP 進捗通知で Fable の活動 (読んでいるファイル等) を流す
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const VERSION = "0.5.1";
+const VERSION = "0.6.0";
 const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
 const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
@@ -43,6 +44,7 @@ const FABLE_MCP_INSTRUCTIONS = `
 Use Fable 5 as the external deep-reasoning architect/evaluator.
 
 Routing:
+- For setup/troubleshooting questions, call fable_status first. It is local-only and does not call Fable or spend API credits.
 - In Codex Plan mode, call fable_plan first unless the user explicitly says "without Fable" / "Fableなし".
 - In normal mode, call Fable only when the user mentions Fable/Fable5/Feyble/フェイブル, or asks for a quality loop.
 - For "合格まで回して", "N点まで", or "loop/eval-loop", call fable_plan with loop_threshold, implement, then call fable_review.
@@ -79,6 +81,8 @@ const CLAUDE_NOT_FOUND =
   `claude CLI が見つかりません (${CLAUDE_BIN})。\n` +
   `Claude Code をインストールしてください: npm i -g @anthropic-ai/claude-code\n` +
   `別の場所にある場合は FABLE_CLAUDE_BIN 環境変数でフルパスを指定してください。`;
+
+const SERVER_FILE = fileURLToPath(import.meta.url);
 
 /**
  * claude -p を起動して完了まで待つ。
@@ -391,9 +395,152 @@ function makeProgressReporter(extra) {
   };
 }
 
+function firstLine(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || "";
+}
+
+function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return "invalid";
+  if (ms < 1000) return `${ms}ms`;
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const rest = sec % 60;
+  return rest ? `${min}m ${rest}s` : `${min}m`;
+}
+
+function runtimeMode() {
+  const p = SERVER_FILE.replaceAll("\\", "/");
+  if (p.includes("/.codex/plugins/cache/fable-mcp/")) return "Codex plugin cache install";
+  if (p.includes("/plugins/fable-mcp/")) return "local Codex plugin package";
+  if (p.endsWith("/server.mjs")) return "manual MCP from repository checkout";
+  return "manual or bundled MCP";
+}
+
+function probeClaudeCli() {
+  const pathLike = CLAUDE_BIN.includes("/") || CLAUDE_BIN.includes("\\");
+  if (pathLike && !existsSync(CLAUDE_BIN)) {
+    return { ok: false, detail: "missing path", version: "", source: process.env.FABLE_CLAUDE_BIN ? "FABLE_CLAUDE_BIN" : "auto-detected" };
+  }
+  const command = IS_WIN ? `"${CLAUDE_BIN}"` : CLAUDE_BIN;
+  const res = spawnSync(command, ["--version"], {
+    shell: IS_WIN,
+    windowsHide: true,
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  if (res.error) {
+    return {
+      ok: false,
+      detail: res.error.code === "ENOENT" ? "not found on PATH" : res.error.message,
+      version: "",
+      source: process.env.FABLE_CLAUDE_BIN ? "FABLE_CLAUDE_BIN" : pathLike ? "auto-detected" : "PATH",
+    };
+  }
+  const version = firstLine(`${res.stdout || ""}\n${res.stderr || ""}`);
+  return {
+    ok: res.status === 0,
+    detail: res.status === 0 ? "ok" : `exit ${res.status}`,
+    version,
+    source: process.env.FABLE_CLAUDE_BIN ? "FABLE_CLAUDE_BIN" : pathLike ? "auto-detected" : "PATH",
+  };
+}
+
+function safeReadJson(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function loopStatusLines(cwd) {
+  const statePath = join(loopDir(cwd), "state.json");
+  if (!existsSync(statePath)) return ["- quality loop: inactive (.fable-loop/state.json not found)"];
+  const state = safeReadJson(statePath);
+  if (!state) return [`- quality loop: state exists but is not valid JSON (${statePath})`];
+  const threshold = Math.floor(state.threshold ?? 90);
+  const iteration = Math.floor(state.iteration ?? 0);
+  const max = Number.isFinite(Number(state.max)) ? Math.floor(Number(state.max)) : "unknown";
+  const score = Number.isFinite(Number(state.score)) ? Math.floor(Number(state.score)) : "unknown";
+  const active = Boolean(state.active);
+  const passed = Boolean(state.passed) || (Number.isFinite(Number(score)) && score >= threshold);
+  return [
+    `- quality loop: ${active ? "active" : "inactive"} | iteration ${iteration}/${max} | score ${score}/${threshold} | passed: ${passed ? "yes" : "no"}`,
+    `- quality loop state: ${statePath}`,
+  ];
+}
+
+function statusText(cwd) {
+  const projectCwd = cwd || process.cwd();
+  const claude = probeClaudeCli();
+  const hasApiKey = Boolean(process.env.ANTHROPIC_API_KEY);
+  const effort = EFFORT || "default(high)";
+  const warnings = [];
+  if (!claude.ok) warnings.push(`claude CLI is not ready (${claude.detail}). Install with: npm i -g @anthropic-ai/claude-code`);
+  if (!hasApiKey) warnings.push("ANTHROPIC_API_KEY is not set. Calls will use the current claude CLI login/session if available.");
+  if (EFFORT === "xhigh" || EFFORT === "max") warnings.push(`FABLE_EFFORT=${EFFORT} is expensive. Prefer per-call effort=max only when the user explicitly asks.`);
+  if (!Number.isFinite(TIMEOUT_MS)) warnings.push("FABLE_TIMEOUT_MS is invalid.");
+  if (!Number.isFinite(MAX_TURNS)) warnings.push("FABLE_MAX_TURNS is invalid.");
+
+  const lastPlan = join(fableDir(projectCwd), "last-plan.md");
+  const authMode = hasApiKey
+    ? "ANTHROPIC_API_KEY present: Anthropic API metered billing"
+    : "no ANTHROPIC_API_KEY: claude CLI login/session, if available";
+
+  return [
+    "# fable-mcp status",
+    "",
+    "## Runtime",
+    `- fable-mcp: v${VERSION}`,
+    `- install mode: ${runtimeMode()}`,
+    `- server file: ${SERVER_FILE}`,
+    `- platform: ${process.platform} ${process.arch}`,
+    `- node: ${process.version}`,
+    `- project cwd: ${projectCwd}`,
+    "",
+    "## Claude Code / Fable",
+    `- model: ${MODEL}`,
+    `- claude binary: ${CLAUDE_BIN} (${claude.source})`,
+    `- claude check: ${claude.ok ? "ok" : "attention"}${claude.version ? ` | ${claude.version}` : ` | ${claude.detail}`}`,
+    `- auth/billing mode: ${authMode}`,
+    `- default effort: ${effort}`,
+    `- max turns per call: ${MAX_TURNS > 0 ? MAX_TURNS : "unlimited"}`,
+    `- timeout per call: ${formatDuration(TIMEOUT_MS)}`,
+    "",
+    "## Project Files",
+    `- last verbatim Fable plan: ${existsSync(lastPlan) ? lastPlan : "not found yet (.fable/last-plan.md will be created by fable_plan)"}`,
+    ...loopStatusLines(projectCwd),
+    "",
+    "## Notes",
+    "- This status check is local-only. It does not call Fable and does not spend API credits.",
+    "- fable_plan / fable_ask / fable_review start `claude -p --model claude-fable-5 --permission-mode plan`.",
+    "- Fable runs read-only through Claude Code plan mode. Codex remains the implementation agent.",
+    warnings.length ? "" : "- No obvious local setup warnings.",
+    ...warnings.map((warning) => `- Warning: ${warning}`),
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
+}
+
 const server = new McpServer(
   { name: "fable-mcp", version: VERSION },
   { instructions: FABLE_MCP_INSTRUCTIONS }
+);
+
+server.tool(
+  "fable_status",
+  "fable-mcp のローカル診断を行う。Claude Code CLI、認証/課金モード、推論設定、最後の Fable プラン、品質ループ状態を確認する。Fable 本体は呼ばないため API コストは発生しない。セットアップ確認やトラブルシュートでは最初に呼ぶこと。",
+  {
+    cwd: z
+      .string()
+      .optional()
+      .describe("診断対象プロジェクトのルート絶対パス。省略時は MCP サーバーの現在ディレクトリ。"),
+  },
+  async ({ cwd }) => toToolResult({ isError: false, text: statusText(cwd) })
 );
 
 server.tool(

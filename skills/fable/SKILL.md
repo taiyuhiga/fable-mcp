@@ -5,6 +5,7 @@ description: Use when the user mentions Fable, Fable5, Feyble, フェイブル, 
 
 Use the `fable` MCP tools:
 
+- `fable_status` for setup checks and troubleshooting. It is local-only and does not call Fable or spend API credits.
 - `fable_plan` for implementation design. In Plan mode, use this unless the user explicitly says to plan without Fable.
 - `fable_ask` for Fable-backed questions and tradeoff analysis.
 - `fable_review` for implementation review and quality-loop evaluation.
