@@ -21106,7 +21106,7 @@ var StdioServerTransport = class {
 };
 
 // server.mjs
-var VERSION = "0.5.0";
+var VERSION = "0.5.1";
 var MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 var TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1e3);
 var MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60);
@@ -21294,7 +21294,13 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
 
 ---
 [fable-mcp] session_id: ${resultEvent.session_id || "n/a"} (\u540C\u3058\u4F1A\u8A71\u3092\u7D9A\u3051\u308B\u306B\u306F\u6B21\u56DE\u3053\u306E session_id \u3092\u6E21\u3059) | effort: ${effortLevel || "default(high)"} | cost: ${cost} | ${turns} | ${elapsedSec}s`;
-        resolve({ isError: Boolean(resultEvent.is_error), text: resultEvent.result + footer });
+        resolve({
+          isError: Boolean(resultEvent.is_error),
+          text: resultEvent.result + footer,
+          rawText: resultEvent.result,
+          sessionId: resultEvent.session_id || "",
+          effort: effortLevel || "default(high)"
+        });
         return;
       }
       resolve({
@@ -21319,6 +21325,27 @@ function withRelayDirective(res, what, extraNote = "") {
 [fable-mcp\u2192\u5B9F\u88C5\u30A8\u30FC\u30B8\u30A7\u30F3\u30C8\u3078] \u3053\u306E${what}\u304C\u6B63\u3067\u3059\u3002\u30E6\u30FC\u30B6\u30FC\u306B\u63D0\u793A\u3059\u308B\u3068\u304D\u306F\u8981\u7D04\u30FB\u8A00\u3044\u63DB\u3048\u30FB\u518D\u69CB\u6210\u3092\u305B\u305A\u5168\u6587\u3092\u305D\u306E\u307E\u307E\u63D0\u793A\u3057\u3066\u304F\u3060\u3055\u3044\u3002` + (extraNote || `\u3042\u306A\u305F\u81EA\u8EAB\u306E\u88DC\u8DB3\u3084\u610F\u898B\u304C\u3042\u308B\u5834\u5408\u306F Fable \u306E${what}\u3068\u306F\u5206\u3051\u3066\u5225\u8A18\u3057\u3066\u304F\u3060\u3055\u3044\u3002`);
   }
   return res;
+}
+function fableDir(cwd) {
+  return join(cwd, ".fable");
+}
+function saveLastPlan(cwd, { planText, task, sessionId, effort }) {
+  mkdirSync(fableDir(cwd), { recursive: true });
+  writeFileSync(join(fableDir(cwd), "last-plan.md"), planText);
+  writeFileSync(
+    join(fableDir(cwd), "last-plan.meta.json"),
+    JSON.stringify(
+      {
+        saved_at: (/* @__PURE__ */ new Date()).toISOString(),
+        model: MODEL,
+        session_id: sessionId || "",
+        effort: effort || "",
+        task
+      },
+      null,
+      2
+    )
+  );
 }
 function loopDir(cwd) {
   return join(cwd, ".fable-loop");
@@ -21421,6 +21448,21 @@ server.tool(
 ${task}
 </task>`;
     const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    if (!res.isError && res.rawText) {
+      try {
+        saveLastPlan(cwd, {
+          planText: res.rawText,
+          task,
+          sessionId: res.sessionId,
+          effort: res.effort
+        });
+        res.text += `
+[fable-mcp] Fable \u30D7\u30E9\u30F3\u539F\u6587\u3092 ${join(cwd, ".fable", "last-plan.md")} \u306B\u4FDD\u5B58\u3057\u307E\u3057\u305F\u3002`;
+      } catch (e) {
+        res.text += `
+[fable-mcp] Fable \u30D7\u30E9\u30F3\u539F\u6587\u306E\u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${e.message}`;
+      }
+    }
     if (threshold != null && !res.isError) {
       const m = [...res.text.matchAll(/<criteria>([\s\S]*?)<\/criteria>/g)].pop();
       const criteriaText = m ? m[1].trim() : res.text;

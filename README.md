@@ -72,6 +72,8 @@ Fable5に聞いて: このリポジトリは何をするもの?
 
 Plan mode では、Fable と明示しなくても `fable_plan` が起動します。「Fableなしで」と言えば Codex だけでプランします。
 
+`fable_plan` は、Codex の Plan UI が要約・再構成してしまう場合に備えて、Fable のプラン原文を常にプロジェクト内の `.fable/last-plan.md` に保存します。このファイルが正本です。
+
 ## 手動MCPセットアップ (フォールバック)
 
 ### 楽な方法: AIエージェントに任せる

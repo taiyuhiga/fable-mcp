@@ -25,7 +25,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const VERSION = "0.5.0";
+const VERSION = "0.5.1";
 const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
 const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
@@ -257,7 +257,13 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
         const footer =
           `${capNote}\n\n---\n[fable-mcp] session_id: ${resultEvent.session_id || "n/a"}` +
           ` (同じ会話を続けるには次回この session_id を渡す) | effort: ${effortLevel || "default(high)"} | cost: ${cost} | ${turns} | ${elapsedSec}s`;
-        resolve({ isError: Boolean(resultEvent.is_error), text: resultEvent.result + footer });
+        resolve({
+          isError: Boolean(resultEvent.is_error),
+          text: resultEvent.result + footer,
+          rawText: resultEvent.result,
+          sessionId: resultEvent.session_id || "",
+          effort: effortLevel || "default(high)",
+        });
         return;
       }
       resolve({
@@ -288,6 +294,35 @@ function withRelayDirective(res, what, extraNote = "") {
       (extraNote || `あなた自身の補足や意見がある場合は Fable の${what}とは分けて別記してください。`);
   }
   return res;
+}
+
+/* ========== Fable plan の正本保存 ==========
+ * Codex Plan UI がプランを要約・再構成してしまっても、Fable の原文は
+ * .fable/last-plan.md に必ず残す。metadata は別ファイルに分け、
+ * last-plan.md は表示用の混ぜ物なしの Fable 原文にする。
+ */
+
+function fableDir(cwd) {
+  return join(cwd, ".fable");
+}
+
+function saveLastPlan(cwd, { planText, task, sessionId, effort }) {
+  mkdirSync(fableDir(cwd), { recursive: true });
+  writeFileSync(join(fableDir(cwd), "last-plan.md"), planText);
+  writeFileSync(
+    join(fableDir(cwd), "last-plan.meta.json"),
+    JSON.stringify(
+      {
+        saved_at: new Date().toISOString(),
+        model: MODEL,
+        session_id: sessionId || "",
+        effort: effort || "",
+        task,
+      },
+      null,
+      2
+    )
+  );
 }
 
 /* ========== 品質ループ (eval-loop) の状態管理 ==========
@@ -430,6 +465,19 @@ server.tool(
 ${task}
 </task>`;
     const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    if (!res.isError && res.rawText) {
+      try {
+        saveLastPlan(cwd, {
+          planText: res.rawText,
+          task,
+          sessionId: res.sessionId,
+          effort: res.effort,
+        });
+        res.text += `\n[fable-mcp] Fable プラン原文を ${join(cwd, ".fable", "last-plan.md")} に保存しました。`;
+      } catch (e) {
+        res.text += `\n[fable-mcp] Fable プラン原文の保存に失敗しました: ${e.message}`;
+      }
+    }
     if (threshold != null && !res.isError) {
       const m = [...res.text.matchAll(/<criteria>([\s\S]*?)<\/criteria>/g)].pop();
       const criteriaText = m ? m[1].trim() : res.text;
