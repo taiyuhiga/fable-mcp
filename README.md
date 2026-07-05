@@ -41,7 +41,15 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export FABLE_EFFORT="high"   # 任意: low / medium / high / xhigh / max
 ```
 
-または Codex の plugin MCP override で `ANTHROPIC_API_KEY` を設定します。未設定の場合は、`claude` CLI の現在のログイン認証で動きます。
+または Codex の plugin MCP override で `ANTHROPIC_API_KEY` を設定します:
+
+```toml
+[plugins."fable-mcp@fable-mcp".mcp_servers.fable.env]
+ANTHROPIC_API_KEY = "sk-ant-..."
+FABLE_EFFORT = "high"   # 任意
+```
+
+未設定の場合は、`claude` CLI の現在のログイン認証で動きます。
 
 ### 2. Plugin marketplace を追加してインストール
 
