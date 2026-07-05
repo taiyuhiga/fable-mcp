@@ -6887,8 +6887,8 @@ var require_dist = __commonJS({
 
 // server.mjs
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21109,7 +21109,7 @@ var StdioServerTransport = class {
 };
 
 // server.mjs
-var VERSION = "0.7.1";
+var VERSION = "0.7.2";
 var MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 var TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1e3);
 var MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60);
@@ -21450,6 +21450,7 @@ function writeLoopState(loop, state) {
 function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", effort = "", costUsd = null, autoApprove = false } = {}) {
   const loopId = makeLoopId();
   const loop = sessionLoopRef(cwd, loopId);
+  const baseline = workingTreeFingerprint(cwd);
   mkdirSync(loop.turnsDir, { recursive: true });
   writeFileSync(join(loop.dir, "task.md"), task);
   writeFileSync(join(loop.dir, "criteria.md"), criteriaText);
@@ -21479,6 +21480,10 @@ function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", eff
     snapshot_enabled: isGitRepo(cwd),
     snapshot_status: isGitRepo(cwd) ? "ready" : "disabled: not a git repository",
     write_targets: [],
+    implementation_baseline_fingerprint: baseline.hash,
+    implementation_baseline_paths: baseline.paths,
+    review_required_since: "",
+    review_required_paths: [],
     ended_reason: "",
     started_at: (/* @__PURE__ */ new Date()).toISOString()
   });
@@ -21537,6 +21542,26 @@ function listChangedPaths(cwd) {
     if (path && !isStatePath(path)) paths.push(path);
   }
   return [...new Set(paths)].sort();
+}
+function workingTreeFingerprint(cwd) {
+  const paths = listChangedPaths(cwd);
+  const hash = createHash("sha256");
+  hash.update(`paths:${paths.length}
+`);
+  for (const path of paths) {
+    hash.update(`path:${path}
+`);
+    const abs = join(cwd, path);
+    try {
+      const stat = statSync(abs);
+      hash.update(`stat:${stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other"}:${stat.size}
+`);
+      if (stat.isFile()) hash.update(readFileSync(abs));
+    } catch {
+      hash.update("missing\n");
+    }
+  }
+  return { hash: hash.digest("hex"), paths };
 }
 function mergeWriteTargets(state, paths) {
   const merged = new Set(Array.isArray(state.write_targets) ? state.write_targets.map(normalizeRepoPath) : []);
@@ -21831,6 +21856,8 @@ function readLoopSnapshot(cwd) {
       bestScore: Number.isFinite(Number(state.best_score)) ? Math.floor(Number(state.best_score)) : 0,
       bestIteration: Number.isFinite(Number(state.best_iteration)) ? Math.floor(Number(state.best_iteration)) : -1,
       bestSnapshotRef: state.best_snapshot_ref || "",
+      reviewRequiredSince: state.review_required_since || "",
+      reviewRequiredPaths: Array.isArray(state.review_required_paths) ? state.review_required_paths : [],
       cumulativeCostUsd: Number(state.cumulative_cost_usd || 0)
     };
   });
@@ -21852,6 +21879,10 @@ function loopStatusLines(loop) {
     lines.push(
       `- ${item.loopId}: ${marker}${item.active ? "active" : "inactive"} | phase ${item.phase} | ${approval} | iteration ${item.iteration}/${item.max} | score ${item.score}/${item.threshold} | passed: ${item.passed ? "yes" : "no"}${best}${cost}`
     );
+    if (item.reviewRequiredSince) {
+      lines.push(`  review required since: ${item.reviewRequiredSince}`);
+      lines.push(`  review required paths: ${item.reviewRequiredPaths.slice(0, 10).join(", ") || "(unknown)"}`);
+    }
     lines.push(`  state: ${item.statePath}`);
   }
   return lines;
@@ -21975,7 +22006,7 @@ server.tool(
 );
 server.tool(
   "fable_loop_approve",
-  "\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u53D7\u3051\u5165\u308C\u57FA\u6E96\u3092\u30E6\u30FC\u30B6\u30FC\u304C\u627F\u8A8D\u3057\u305F\u5F8C\u306B\u547C\u3076\u3002\u627F\u8A8D\u5F85\u3061\u306E loop_id \u3092 implementing phase \u3067 active \u306B\u3057\u3001\u5B9F\u88C5\u5F8C\u306E fable_review \u307E\u3067 Stop hook \u306F\u5DEE\u3057\u623B\u3055\u306A\u3044\u3002Fable \u672C\u4F53\u306F\u547C\u3070\u306A\u3044\u305F\u3081 API \u30B3\u30B9\u30C8\u306F\u767A\u751F\u3057\u306A\u3044\u3002",
+  "\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u53D7\u3051\u5165\u308C\u57FA\u6E96\u3092\u30E6\u30FC\u30B6\u30FC\u304C\u627F\u8A8D\u3057\u305F\u5F8C\u306B\u547C\u3076\u3002\u627F\u8A8D\u5F85\u3061\u306E loop_id \u3092 implementing phase \u3067 active \u306B\u3057\u3001\u5B9F\u88C5\u5F8C\u306B\u5909\u66F4\u304C\u5165\u3063\u305F\u3089 fable_review \u307E\u3067 Stop hook \u304C\u5DEE\u3057\u623B\u3059\u3002Fable \u672C\u4F53\u306F\u547C\u3070\u306A\u3044\u305F\u3081 API \u30B3\u30B9\u30C8\u306F\u767A\u751F\u3057\u306A\u3044\u3002",
   {
     cwd: external_exports.string().describe("\u5BFE\u8C61\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u306E\u30EB\u30FC\u30C8\u7D76\u5BFE\u30D1\u30B9\u3002"),
     loop_id: external_exports.string().optional().describe("\u627F\u8A8D\u3059\u308B loop_id\u3002\u7701\u7565\u6642\u306F\u73FE\u5728\u30EB\u30FC\u30D7\u3002")
@@ -21986,11 +22017,16 @@ server.tool(
       return toToolResult({ isError: true, text: "\u627F\u8A8D\u5BFE\u8C61\u306E\u54C1\u8CEA\u30EB\u30FC\u30D7\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002\u5148\u306B fable_plan with loop_threshold \u3092\u547C\u3093\u3067\u304F\u3060\u3055\u3044\u3002" });
     }
     const state = loop.state;
+    const baseline = workingTreeFingerprint(cwd);
     state.criteria_approved = true;
     state.active = true;
     state.phase = "implementing";
     state.ended_reason = "";
     state.approved_at = (/* @__PURE__ */ new Date()).toISOString();
+    state.implementation_baseline_fingerprint = baseline.hash;
+    state.implementation_baseline_paths = baseline.paths;
+    state.review_required_since = "";
+    state.review_required_paths = [];
     writeLoopState(loop, state);
     if (!loop.legacy) writeCurrentLoopId(cwd, loop.loopId);
     return toToolResult({
@@ -22263,6 +22299,8 @@ ${item.text}`).join("\n\n---\n\n"),
         state.phase = "eval";
         state.score = null;
         state.passed = false;
+        state.review_required_since = "";
+        state.review_required_paths = [];
         state.last_eval_error = "missing_or_invalid_eval_json";
         state.last_eval_error_at = (/* @__PURE__ */ new Date()).toISOString();
         try {
@@ -22322,6 +22360,8 @@ ${item.text}`).join("\n\n---\n\n"),
           state.phase = "eval";
           state.evaluated_iteration = iter + 1;
           state.eval_repair_attempts = 0;
+          state.review_required_since = "";
+          state.review_required_paths = [];
           state.last_eval_error = "";
           if (score > (state.best_score ?? 0)) {
             state.best_score = score;

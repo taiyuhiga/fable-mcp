@@ -1,6 +1,6 @@
 {
   "name": "fable-mcp",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "MCP server that lets any MCP client (OpenAI Codex, etc.) consult Claude Fable 5 as a deep-reasoning architect, via Claude Code headless mode",
   "type": "module",
   "main": "server.mjs",
@@ -10,7 +10,9 @@
   "scripts": {
     "build": "esbuild server.mjs --bundle --platform=node --format=esm --outfile=dist/server.bundled.mjs && node scripts/sync-plugin.mjs",
     "check": "node --check server.mjs && node --check hooks/fable-loop-stop.mjs && node --check hooks/fable-loop-prompt-submit.mjs && node --check hooks/inject-fable-instructions.mjs && node --check scripts/sync-plugin.mjs && node --check scripts/fable-loop-smoke.mjs && node --check dist/server.bundled.mjs && node --check plugins/fable-mcp/dist/server.bundled.mjs",
-    "smoke": "node scripts/fable-loop-smoke.mjs"
+    "smoke": "node scripts/fable-loop-smoke.mjs",
+    "codex-smoke": "bash scripts/codex-plugin-install-smoke.sh",
+    "live-trial": "bash scripts/codex-live-trial.sh"
   },
   "engines": {
     "node": ">=18"

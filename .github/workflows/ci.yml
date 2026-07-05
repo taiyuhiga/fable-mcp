@@ -21,10 +21,14 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run check
+      - run: npm run smoke
+      - run: npm run codex-smoke
       - name: Installer scripts parse
         shell: bash
         run: |
           bash -n install.sh
+          bash -n scripts/codex-plugin-install-smoke.sh
+          bash -n scripts/codex-live-trial.sh
           if command -v pwsh >/dev/null 2>&1; then
             pwsh -NoProfile -Command '$null = [scriptblock]::Create((Get-Content -Raw install.ps1))'
           else
@@ -38,9 +42,10 @@ jobs:
           test -f plugins/fable-mcp/.mcp.json
           test -f plugins/fable-mcp/hooks/hooks.json
           test -f plugins/fable-mcp/hooks/fable-loop-stop.mjs
+          test -f plugins/fable-mcp/hooks/fable-loop-prompt-submit.mjs
           test -f plugins/fable-mcp/dist/server.bundled.mjs
 
-      - name: MCP handshake exposes all four tools
+      - name: MCP handshake exposes all seven tools
         shell: bash
         run: |
           printf '%s\n' \
@@ -54,6 +59,9 @@ jobs:
           grep -q fable_plan out.json
           grep -q fable_ask out.json
           grep -q fable_review out.json
+          grep -q fable_loop_approve out.json
+          grep -q fable_loop_abort out.json
+          grep -q fable_loop_restore_best out.json
           grep -q "fable-mcp status" out.json
           grep -q "## Next Actions" out.json
           grep -q "does not call Fable" out.json

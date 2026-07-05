@@ -15,4 +15,4 @@ Use the `fable` MCP tools:
 
 Relay Fable output verbatim. Do not summarize or restructure Fable plans into Codex's own Summary / Key Changes format. If you need to add Codex-specific commentary, put it after the Fable output under a clearly separate heading.
 
-For quality loops, call `fable_plan` with `loop_threshold`, show the generated criteria to the user, call `fable_loop_approve` after approval, implement, then call `fable_review`. The Stop hook only acts after `fable_review` writes `phase="eval"`. If the Stop hook continues the turn, follow `.fable-loop/sessions/<loop_id>/turns/*-eval.json` feedback and call `fable_review` again.
+For quality loops, call `fable_plan` with `loop_threshold`, show the generated criteria to the user, call `fable_loop_approve` after approval, implement, then call `fable_review`. The Stop hook continues/finishes only after `fable_review` writes `phase="eval"`, but it blocks if implementation files changed and Codex tries to stop before calling `fable_review`. If the Stop hook continues the turn, follow `.fable-loop/sessions/<loop_id>/turns/*-eval.json` feedback and call `fable_review` again.

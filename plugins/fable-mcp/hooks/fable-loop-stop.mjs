@@ -15,7 +15,9 @@
  *   .fable-loop/state.json
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
@@ -59,6 +61,56 @@ function resolveLoop(cwd) {
   return null;
 }
 
+function isInternalPath(path) {
+  const p = String(path || "").replaceAll("\\", "/").replace(/^\/+/, "");
+  return p === ".fable-loop" || p.startsWith(".fable-loop/") || p === ".fable" || p.startsWith(".fable/");
+}
+
+function listChangedPaths(cwd) {
+  const res = spawnSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+    cwd,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 10000,
+  });
+  if (res.status !== 0 || !res.stdout) return [];
+  const entries = res.stdout.split("\0").filter(Boolean);
+  const paths = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const status = entry.slice(0, 2);
+    let path = entry.slice(3);
+    if (status.includes("R") || status.includes("C")) {
+      const next = entries[i + 1];
+      if (next) {
+        path = next;
+        i++;
+      }
+    }
+    path = String(path || "").replaceAll("\\", "/");
+    if (path && !isInternalPath(path)) paths.push(path);
+  }
+  return [...new Set(paths)].sort();
+}
+
+function workingTreeFingerprint(cwd) {
+  const paths = listChangedPaths(cwd);
+  const hash = createHash("sha256");
+  hash.update(`paths:${paths.length}\n`);
+  for (const path of paths) {
+    hash.update(`path:${path}\n`);
+    const abs = join(cwd, path);
+    try {
+      const stat = statSync(abs);
+      hash.update(`stat:${stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other"}:${stat.size}\n`);
+      if (stat.isFile()) hash.update(readFileSync(abs));
+    } catch {
+      hash.update("missing\n");
+    }
+  }
+  return { hash: hash.digest("hex"), paths };
+}
+
 let input = "";
 process.stdin.on("data", (c) => (input += c));
 process.stdin.on("end", () => {
@@ -82,6 +134,39 @@ process.stdin.on("end", () => {
   }
 
   const phase = state.phase || "implementing";
+  if (phase === "implementing") {
+    const current = workingTreeFingerprint(cwd);
+    const baseline = state.implementation_baseline_fingerprint || "";
+    if (!baseline && current.paths.length > 0) {
+      state.implementation_baseline_fingerprint = current.hash;
+      state.implementation_baseline_paths = current.paths;
+      state.review_required_since = "";
+      state.review_required_paths = [];
+      try {
+        writeFileSync(loop.statePath, JSON.stringify(state, null, 2));
+      } catch {
+        /* fall through */
+      }
+    } else if (current.paths.length > 0 && current.hash !== baseline) {
+      state.review_required_since = state.review_required_since || new Date().toISOString();
+      state.review_required_paths = current.paths;
+      state.last_review_required_at = new Date().toISOString();
+      try {
+        writeFileSync(loop.statePath, JSON.stringify(state, null, 2));
+      } catch {
+        /* block anyway */
+      }
+      const reason =
+        `[fable-loop ${loop.loopId} | review required before stopping]\n` +
+        `品質ループの実装修正が検出されましたが、まだ fable_review が呼ばれていません。\n` +
+        `変更パス:\n${current.paths.slice(0, 20).map((p) => `- ${p}`).join("\n")}` +
+        (current.paths.length > 20 ? `\n- ... and ${current.paths.length - 20} more` : "") +
+        `\n次の手順: fable_review を呼んで、Fable に受け入れ基準で採点させてください。` +
+        `\n注意: レビュー前にターンを終えると品質ループが止まって見えるため、このStop hookが差し戻しています。`;
+      out({ decision: "block", reason });
+      return;
+    }
+  }
   if (phase !== "eval") {
     out({});
     return;
@@ -154,6 +239,11 @@ process.stdin.on("end", () => {
   }
   state.last_blocked_iteration = iteration;
   state.phase = "implementing";
+  const baseline = workingTreeFingerprint(cwd);
+  state.implementation_baseline_fingerprint = baseline.hash;
+  state.implementation_baseline_paths = baseline.paths;
+  state.review_required_since = "";
+  state.review_required_paths = [];
   state.updated_at = new Date().toISOString();
   try {
     writeFileSync(loop.statePath, JSON.stringify(state, null, 2));

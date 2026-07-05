@@ -26,12 +26,12 @@ If you prefer a terminal one-liner, use the command for your OS:
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.2/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.2/install.ps1 | iex
 ```
 
 The installer checks Node.js, Codex CLI, and Claude Code CLI, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
@@ -72,7 +72,7 @@ Prerequisites:
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.1
+codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.2
 codex plugin add fable-mcp@fable-mcp
 ```
 
@@ -148,7 +148,7 @@ In Codex Plan mode, the plugin instructions tell Codex to call `fable_plan` unle
 
 When `fable_plan` is called with `loop_threshold`, it creates a loop under `.fable-loop/sessions/<loop_id>/` and leaves it awaiting criteria approval by default. Codex should show the generated `criteria.md` to the user, then call `fable_loop_approve` before implementation/review starts. The old v0.6 `.fable-loop/state.json` layout is still read for compatibility.
 
-The Stop hook is phase-gated: it only continues or finishes a loop when `phase="eval"`, after `fable_review` has written a fresh score. It stays silent during criteria approval and implementation (`phase="implementing"`), so it does not block too early.
+The Stop hook is phase-gated: it continues or finishes a loop only when `phase="eval"`, after `fable_review` has written a fresh score. It stays silent right after criteria approval, but if implementation files changed and Codex tries to stop before calling `fable_review`, the hook blocks with a review-required message. This prevents a loop from silently dying after implementation.
 
 During review, fable-mcp parses Fable's `<eval>{...}</eval>` score, records cumulative cost, captures git snapshots under `refs/fable-loop/<loop_id>/...`, and marks the best-scoring snapshot for optional restore. If a rate-limit event appears in Claude Code's stream, the progress message says that Fable is rate-limited instead of looking frozen. A UserPromptSubmit watchdog also warns locally about stale active loops and overlapping `write_targets`.
 
@@ -158,9 +158,19 @@ Run the local, no-Fable smoke harness before releases:
 
 ```sh
 npm run smoke
+npm run codex-smoke
 ```
 
-For a full live trial, use a new Codex thread and run `fable_plan -> show criteria -> fable_loop_approve -> implement -> fable_review -> Stop hook`. That full path calls Fable and can spend API credits.
+`npm run codex-smoke` uses an isolated `CODEX_HOME` to verify `marketplace add -> plugin add -> codex mcp list`. It skips automatically when the Codex CLI is not installed.
+
+For a Codex live trial that still avoids Fable API spend:
+
+```sh
+npm run live-trial
+npm run live-trial -- --allow-model-call
+```
+
+`--allow-model-call` asks Codex to call only `fable_status`. It does not call Fable, but it does use your Codex/OpenAI account. For a full release trial, use a new Codex thread and run `fable_plan -> show criteria -> fable_loop_approve -> implement -> fable_review -> Stop hook`. That full path calls Fable and can spend API credits.
 
 ## Environment Variables
 

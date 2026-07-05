@@ -77,6 +77,8 @@ async function withClient(fn) {
 
 async function main() {
   const cwd = tmpProject("fable-loop-smoke-");
+  const gitInit = spawnSync("git", ["init"], { cwd, encoding: "utf8", timeout: 10000 });
+  assert.equal(gitInit.status, 0, gitInit.stderr);
   const loop = makeLoop(cwd, "loop-smoke");
 
   await withClient(async (client) => {
@@ -95,6 +97,13 @@ async function main() {
   let state = readJson(loop.statePath);
   assert.equal(state.phase, "implementing");
   assert.deepEqual(runStopHook(cwd), {}, "Stop hook must not block before fable_review sets phase=eval");
+
+  writeFileSync(join(cwd, "implementation.txt"), "changed after approval\n");
+  const reviewRequired = runStopHook(cwd);
+  assert.equal(reviewRequired.decision, "block");
+  assert.match(reviewRequired.reason, /review required before stopping/);
+  assert.match(reviewRequired.reason, /fable_review/);
+  assert.deepEqual(readJson(loop.statePath).review_required_paths, ["implementation.txt"]);
 
   state.phase = "eval";
   state.score = null;

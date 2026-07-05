@@ -19,8 +19,8 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,7 +28,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const VERSION = "0.7.1";
+const VERSION = "0.7.2";
 const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
 const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
@@ -455,6 +455,7 @@ function writeLoopState(loop, state) {
 function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", effort = "", costUsd = null, autoApprove = false } = {}) {
   const loopId = makeLoopId();
   const loop = sessionLoopRef(cwd, loopId);
+  const baseline = workingTreeFingerprint(cwd);
   mkdirSync(loop.turnsDir, { recursive: true });
   writeFileSync(join(loop.dir, "task.md"), task);
   writeFileSync(join(loop.dir, "criteria.md"), criteriaText);
@@ -484,6 +485,10 @@ function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", eff
     snapshot_enabled: isGitRepo(cwd),
     snapshot_status: isGitRepo(cwd) ? "ready" : "disabled: not a git repository",
     write_targets: [],
+    implementation_baseline_fingerprint: baseline.hash,
+    implementation_baseline_paths: baseline.paths,
+    review_required_since: "",
+    review_required_paths: [],
     ended_reason: "",
     started_at: new Date().toISOString(),
   });
@@ -549,6 +554,24 @@ function listChangedPaths(cwd) {
     if (path && !isStatePath(path)) paths.push(path);
   }
   return [...new Set(paths)].sort();
+}
+
+function workingTreeFingerprint(cwd) {
+  const paths = listChangedPaths(cwd);
+  const hash = createHash("sha256");
+  hash.update(`paths:${paths.length}\n`);
+  for (const path of paths) {
+    hash.update(`path:${path}\n`);
+    const abs = join(cwd, path);
+    try {
+      const stat = statSync(abs);
+      hash.update(`stat:${stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other"}:${stat.size}\n`);
+      if (stat.isFile()) hash.update(readFileSync(abs));
+    } catch {
+      hash.update("missing\n");
+    }
+  }
+  return { hash: hash.digest("hex"), paths };
 }
 
 function mergeWriteTargets(state, paths) {
@@ -870,6 +893,8 @@ function readLoopSnapshot(cwd) {
       bestScore: Number.isFinite(Number(state.best_score)) ? Math.floor(Number(state.best_score)) : 0,
       bestIteration: Number.isFinite(Number(state.best_iteration)) ? Math.floor(Number(state.best_iteration)) : -1,
       bestSnapshotRef: state.best_snapshot_ref || "",
+      reviewRequiredSince: state.review_required_since || "",
+      reviewRequiredPaths: Array.isArray(state.review_required_paths) ? state.review_required_paths : [],
       cumulativeCostUsd: Number(state.cumulative_cost_usd || 0),
     };
   });
@@ -898,6 +923,10 @@ function loopStatusLines(loop) {
     lines.push(
       `- ${item.loopId}: ${marker}${item.active ? "active" : "inactive"} | phase ${item.phase} | ${approval} | iteration ${item.iteration}/${item.max} | score ${item.score}/${item.threshold} | passed: ${item.passed ? "yes" : "no"}${best}${cost}`
     );
+    if (item.reviewRequiredSince) {
+      lines.push(`  review required since: ${item.reviewRequiredSince}`);
+      lines.push(`  review required paths: ${item.reviewRequiredPaths.slice(0, 10).join(", ") || "(unknown)"}`);
+    }
     lines.push(`  state: ${item.statePath}`);
   }
   return lines;
@@ -1040,7 +1069,7 @@ server.tool(
 
 server.tool(
   "fable_loop_approve",
-    "品質ループの受け入れ基準をユーザーが承認した後に呼ぶ。承認待ちの loop_id を implementing phase で active にし、実装後の fable_review まで Stop hook は差し戻さない。Fable 本体は呼ばないため API コストは発生しない。",
+  "品質ループの受け入れ基準をユーザーが承認した後に呼ぶ。承認待ちの loop_id を implementing phase で active にし、実装後に変更が入ったら fable_review まで Stop hook が差し戻す。Fable 本体は呼ばないため API コストは発生しない。",
   {
     cwd: z.string().describe("対象プロジェクトのルート絶対パス。"),
     loop_id: z.string().optional().describe("承認する loop_id。省略時は現在ループ。"),
@@ -1051,11 +1080,16 @@ server.tool(
       return toToolResult({ isError: true, text: "承認対象の品質ループが見つかりません。先に fable_plan with loop_threshold を呼んでください。" });
     }
     const state = loop.state;
+    const baseline = workingTreeFingerprint(cwd);
     state.criteria_approved = true;
     state.active = true;
     state.phase = "implementing";
     state.ended_reason = "";
     state.approved_at = new Date().toISOString();
+    state.implementation_baseline_fingerprint = baseline.hash;
+    state.implementation_baseline_paths = baseline.paths;
+    state.review_required_since = "";
+    state.review_required_paths = [];
     writeLoopState(loop, state);
     if (!loop.legacy) writeCurrentLoopId(cwd, loop.loopId);
     return toToolResult({
@@ -1397,6 +1431,8 @@ ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : 
         state.phase = "eval";
         state.score = null;
         state.passed = false;
+        state.review_required_since = "";
+        state.review_required_paths = [];
         state.last_eval_error = "missing_or_invalid_eval_json";
         state.last_eval_error_at = new Date().toISOString();
         try {
@@ -1459,6 +1495,8 @@ ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : 
           state.phase = "eval";
           state.evaluated_iteration = iter + 1;
           state.eval_repair_attempts = 0;
+          state.review_required_since = "";
+          state.review_required_paths = [];
           state.last_eval_error = "";
           if (score > (state.best_score ?? 0)) {
             state.best_score = score;
