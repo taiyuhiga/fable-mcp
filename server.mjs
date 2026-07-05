@@ -424,7 +424,11 @@ ${task}
       }
     }
     return toToolResult(
-      withRelayDirective(res, "プラン", "変更が必要な場合のみ「Fableプランからの変更点」として差分と理由を別記してください。")
+      withRelayDirective(
+        res,
+        "プラン",
+        "Plan モードの場合、proposed_plan (プラン本文) には Summary や Key Changes などあなたの再構成を書かず、上記プラン全文を一字一句そのままコピーして入れること (この [fable-mcp] フッターは除いてよい)。変更が必要な場合のみ、原文の後に「Fableプランからの変更点」として差分と理由を別記してください。"
+      )
     );
   }
 );
