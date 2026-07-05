@@ -1,0 +1,75 @@
+# fable-mcp セットアップ早見表
+
+使いたいAIエージェント本人に、この1行を貼ってください。
+
+```text
+https://github.com/taiyuhiga/fable-mcp をセットアップして。
+```
+
+## 重要なルール
+
+- Codexに貼ったら、Codexだけをセットアップします。
+- Cursorに貼ったら、Cursorだけをセットアップします。
+- Antigravityに貼ったら、Antigravityだけをセットアップします。
+- Claude Code CLIはFableを呼ぶためのランタイムです。Claude Codeという別エージェントをセットアップするものではありません。
+- `claude` CLIがない場合も、勝手にインストールせず、必要なときだけ案内します。
+
+## 手動で実行する場合
+
+### Codexだけ
+
+macOS / Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.2/install.sh | bash
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.2/install.ps1 | iex
+```
+
+### Cursorだけ
+
+```sh
+git clone https://github.com/taiyuhiga/fable-mcp.git
+cd fable-mcp
+npm install
+npm run build
+node scripts/run-python.mjs scripts/setup-current-agent.py --client cursor
+```
+
+### Antigravityだけ
+
+```sh
+git clone https://github.com/taiyuhiga/fable-mcp.git
+cd fable-mcp
+npm install
+npm run build
+node scripts/run-python.mjs scripts/setup-current-agent.py --client antigravity
+```
+
+## 動作確認
+
+セットアップしたAIエージェントを再起動して、新しいスレッドで送ります。
+
+```text
+Fableの状態を確認して
+```
+
+`fable_status` が呼ばれれば接続成功です。これはローカル診断だけなのでAPIコストは発生しません。
+
+実際にFableを呼ぶ確認:
+
+```text
+Fable5に聞いて: このリポジトリは何をするもの？
+```
+
+## 必要なもの
+
+- Node.js 18+
+- Fableを実際に呼ぶ場合だけ Claude Code CLI ランタイム: `npm i -g @anthropic-ai/claude-code`
+- API課金で使う場合だけ `ANTHROPIC_API_KEY`
+
+`ANTHROPIC_API_KEY` を設定しない場合は、`claude` CLIの現在のログイン認証を使います。

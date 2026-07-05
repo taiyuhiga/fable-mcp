@@ -6,6 +6,8 @@
 
 English README: [README.en.md](README.en.md)
 
+短いセットアップ手順だけ見たい場合: [SETUP.md](SETUP.md)
+
 ## 初心者向け: この一文だけでセットアップ
 
 一番簡単なセットアップ方法は、使いたいAIエージェント本人に次の一文だけ貼ることです。GitHub を clone したり、MCP を手入力したりする必要はありません。

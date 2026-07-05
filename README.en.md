@@ -6,6 +6,8 @@ Use Claude Fable 5 as a read-only deep-reasoning architect and evaluator from Co
 
 Japanese README: [README.md](README.md)
 
+Short Japanese setup guide: [SETUP.md](SETUP.md)
+
 ## Easiest Setup: One Sentence
 
 For beginners, the easiest path is to paste this one sentence into the AI agent you want to use. You do not need to clone the repository manually or fill the custom MCP form yourself.
