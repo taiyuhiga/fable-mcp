@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "fable": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/server.bundled.mjs"],
+      "env": {
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY:-}",
+        "FABLE_MODEL": "${FABLE_MODEL:-claude-fable-5}",
+        "FABLE_EFFORT": "${FABLE_EFFORT:-}",
+        "FABLE_MAX_TURNS": "${FABLE_MAX_TURNS:-60}",
+        "FABLE_TIMEOUT_MS": "${FABLE_TIMEOUT_MS:-1200000}",
+        "FABLE_CLAUDE_BIN": "${FABLE_CLAUDE_BIN:-claude}"
+      }
+    }
+  }
+}

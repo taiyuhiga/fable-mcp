@@ -1,0 +1,24 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "fable-mcp",
+  "description": "Fable MCP plugin marketplace for Claude Code.",
+  "owner": {
+    "name": "Taiyu Higa",
+    "url": "https://github.com/taiyuhiga"
+  },
+  "plugins": [
+    {
+      "name": "fable-mcp",
+      "description": "Use Claude Fable 5 as a read-only deep reasoning architect and evaluator from Claude Code.",
+      "version": "0.7.5",
+      "author": {
+        "name": "Taiyu Higa",
+        "url": "https://github.com/taiyuhiga"
+      },
+      "source": "../plugins/fable-mcp-claude-code",
+      "category": "development",
+      "homepage": "https://github.com/taiyuhiga/fable-mcp",
+      "strict": false
+    }
+  ]
+}
