@@ -19,13 +19,13 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
 const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
@@ -273,6 +273,56 @@ function withRelayDirective(res, what, extraNote = "") {
   return res;
 }
 
+/* ========== 品質ループ (eval-loop) の状態管理 ==========
+ * 状態は会話ではなくファイル (.fable-loop/) が持つ。
+ * スコアは Fable の採点 JSON → server.mjs (機械パース) → state.json と流れ、
+ * 実装役 (Codex) の手を一切通らない。続行判定は Stop フック
+ * (hooks/fable-loop-stop.mjs) の整数比較が行う。
+ */
+
+function loopDir(cwd) {
+  return join(cwd, ".fable-loop");
+}
+
+function readLoopState(cwd) {
+  try {
+    return JSON.parse(readFileSync(join(loopDir(cwd), "state.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeLoopState(cwd, state) {
+  state.updated_at = new Date().toISOString();
+  writeFileSync(join(loopDir(cwd), "state.json"), JSON.stringify(state, null, 2));
+}
+
+function initLoop(cwd, task, criteriaText, threshold, max) {
+  mkdirSync(join(loopDir(cwd), "turns"), { recursive: true });
+  writeFileSync(join(loopDir(cwd), "task.md"), task);
+  writeFileSync(join(loopDir(cwd), "criteria.md"), criteriaText);
+  writeLoopState(cwd, {
+    active: true,
+    iteration: 0,
+    score: 0,
+    passed: false,
+    threshold,
+    max,
+    best_score: 0,
+    best_iteration: -1,
+    last_blocked_iteration: -1,
+    started_at: new Date().toISOString(),
+  });
+}
+
+function safeReadLoopFile(cwd, name) {
+  try {
+    return readFileSync(join(loopDir(cwd), name), "utf8");
+  } catch {
+    return "";
+  }
+}
+
 /** MCP クライアントが progressToken を渡してきた場合のみ進捗通知を送る */
 function makeProgressReporter(extra) {
   const progressToken = extra?._meta?.progressToken;
@@ -311,8 +361,40 @@ server.tool(
       .describe(
         "推論の深さ。ユーザーが「じっくり/深く/本気で」と言ったら xhigh か max、「軽く/サクッと」と言ったら medium。未指定ならサーバーのデフォルト。"
       ),
+    loop_threshold: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe(
+        "品質ループの合格点 (推奨: 90)。指定するとプランに受け入れ基準 (採点表) が含まれ、.fable-loop/ が初期化される。以後「実装 → fable_review 採点 → 未達なら Stop フックが差し戻し」の自動ループが回る。ユーザーが「合格まで回して」「◯点まで仕上げて」「ループで」等と言ったときに指定する。"
+      ),
+    loop_max_iterations: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .optional()
+      .describe("品質ループの最大周回数 (デフォルト 4)。無限ループ防止のブレーキ。"),
   },
-  async ({ task, cwd, session_id, effort }, extra) => {
+  async ({ task, cwd, session_id, effort, loop_threshold, loop_max_iterations }, extra) => {
+    const threshold = loop_threshold != null ? Math.floor(loop_threshold) : null;
+    const maxIter = Math.floor(loop_max_iterations ?? 4);
+    const criteriaSection =
+      threshold != null
+        ? `
+
+このタスクは品質ループ (実装 → 採点 → 差し戻し) で仕上げます。プランの最後に、必ず次の形式で受け入れ基準 (採点表) を付けてください:
+<criteria>
+## 受け入れ基準 (合格点: ${threshold}/100)
+### 機械チェック (○×で判定できる項目)
+- (テスト通過・コマンド実行結果・文字数など、誰が確認しても同じ結果になる項目)
+### 採点軸 (LLM評価)
+- axis_key (重み): 何を見るか。何点がどういう状態かの目安 (例: 90=..., 70=...)
+</criteria>
+採点軸のキーは英数字スネークケースで3〜6個。周回をまたいで固定され、後から増減できない前提で選ぶこと。曖昧な形容詞 (「良い」「ちゃんとした」) は数えられる事実か採点可能な観点に翻訳すること。`
+        : "";
     const prompt = `あなたは2エージェント構成の「アーキテクト」役です。あなた (Claude Fable 5) が設計し、別の実装エージェント (Codex) がコードを書きます。
 
 このリポジトリを必要なだけ探索し、深く考えた上で、以下のタスクの実装プランを書いてください。プランは実装エージェントがそのまま実行できる具体性で:
@@ -322,12 +404,25 @@ server.tool(
 - エッジケース・リスク・制約
 - 最後に検証方法 (どうテストするか)
 
-タスクと同じ言語で回答してください。
+タスクと同じ言語で回答してください。${criteriaSection}
 
 <task>
 ${task}
 </task>`;
     const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    if (threshold != null && !res.isError) {
+      const m = [...res.text.matchAll(/<criteria>([\s\S]*?)<\/criteria>/g)].pop();
+      const criteriaText = m ? m[1].trim() : res.text;
+      try {
+        initLoop(cwd, task, criteriaText, threshold, maxIter);
+        res.text +=
+          `\n[fable-loop] 品質ループを初期化しました (合格点 ${threshold}/100, 最大 ${maxIter} 周)。` +
+          `状態: ${join(cwd, ".fable-loop")}/ — 実装が終わったら fable_review を呼ぶこと。` +
+          `state.json / criteria.md / task.md は直接編集禁止 (採点の改竄に当たる)。`;
+      } catch (e) {
+        res.text += `\n[fable-loop] 初期化に失敗しました: ${e.message}`;
+      }
+    }
     return toToolResult(
       withRelayDirective(res, "プラン", "変更が必要な場合のみ「Fableプランからの変更点」として差分と理由を別記してください。")
     );
@@ -367,7 +462,7 @@ ${question}
 
 server.tool(
   "fable_review",
-  "実装完了後、Claude Fable 5 にコードレビューを依頼する。現在のリポジトリの未コミット変更 (git diff) を Fable が読み、バグ・設計との乖離・簡素化の余地を指摘する。大きな実装の後に呼ぶとよい。",
+  "実装完了後、Claude Fable 5 にコードレビューを依頼する。現在のリポジトリの未コミット変更 (git diff) を Fable が読み、バグ・設計との乖離・簡素化の余地を指摘する。大きな実装の後に呼ぶとよい。品質ループ (.fable-loop/) が有効なプロジェクトでは「採点係」として動き、受け入れ基準に照らした絶対評価スコアが state.json に機械記録される (未達なら Stop フックが自動で差し戻す)。",
   {
     cwd: z.string().describe("対象プロジェクトのルート絶対パス。"),
     context: z
@@ -386,13 +481,91 @@ server.tool(
       ),
   },
   async ({ cwd, context, session_id, effort }, extra) => {
-    const prompt = `あなたは別のエージェントが書いた実装のレビュアーです。git status / git diff / git diff --staged で現在の変更を確認し、必要なら周辺コードも読んだ上で、以下を報告してください:
+    const state = readLoopState(cwd);
+    const loopMode = Boolean(state?.active);
+
+    let prompt;
+    if (loopMode) {
+      const taskText = safeReadLoopFile(cwd, "task.md");
+      const criteriaText = context || safeReadLoopFile(cwd, "criteria.md");
+      prompt = `あなたは品質ループの「採点係」です。別のエージェントが実装した現在のリポジトリの状態を、受け入れ基準に照らして絶対評価してください。
+
+契約 (違反した採点は無効):
+- git status / git diff / 実ファイルを必ず自分で開いて確認する。他者の報告や自己申告は信用しない
+- 受け入れ基準の変更・緩和は禁止。基準にない新しい気づきは feedback に書く (採点軸には加えない)
+- 前回スコアとの相対評価をしない。毎回ゼロから、依頼と基準への適合だけで採点する
+- 機械チェック項目はできる限り実際にコマンドで確かめる。読み取り専用モードで実行できない場合は、コードとテスト定義を読んで判定し、その旨を feedback に記す
+
+<task>
+${taskText}
+</task>
+
+<criteria>
+${criteriaText}
+</criteria>
+
+レビュー本文 (指摘は file:line 付き・重大度順) を書いた後、最後に必ず次の形式で採点JSONを1つだけ出力してください:
+<eval>{"score": 0から100の整数, "breakdown": {"採点軸キー": 整数, ...}, "feedback": "次の周回への具体的な修正指示 (何を・なぜ・どう直すか)"}</eval>`;
+    } else {
+      prompt = `あなたは別のエージェントが書いた実装のレビュアーです。git status / git diff / git diff --staged で現在の変更を確認し、必要なら周辺コードも読んだ上で、以下を報告してください:
 - バグ・正しさの問題 (file:line 付き)
 - 意図された設計からの乖離
 - 簡素化・再利用の余地
 重大度順に。特に問題がなければ簡潔にそう言ってください。
 ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : ""}`;
+    }
+
     const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+
+    if (loopMode && !res.isError) {
+      const m = [...res.text.matchAll(/<eval>([\s\S]*?)<\/eval>/g)].pop();
+      let ev = null;
+      if (m) {
+        try {
+          ev = JSON.parse(m[1].trim());
+        } catch {
+          /* パース失敗は下で処理 */
+        }
+      }
+      const rawScore = ev ? Number(ev.score) : NaN;
+      if (!ev || !Number.isFinite(rawScore)) {
+        res.isError = true;
+        res.text +=
+          "\n[fable-loop] 採点JSON (<eval>{...}</eval>) を取得できなかったため、state は更新していません。fable_review をもう一度呼んでください。";
+      } else {
+        // passed は Fable の自己申告ではなく、ここで機械的に確定する
+        const score = Math.max(0, Math.min(100, Math.floor(rawScore)));
+        const threshold = Math.floor(state.threshold ?? 90);
+        const passed = score >= threshold;
+        const iter = Math.floor(state.iteration ?? 0);
+        try {
+          writeFileSync(
+            join(loopDir(cwd), "turns", `turn-${String(iter).padStart(3, "0")}-eval.json`),
+            JSON.stringify(
+              { score, breakdown: ev.breakdown ?? {}, feedback: ev.feedback ?? "", passed, threshold, iteration: iter, evaluated_at: new Date().toISOString() },
+              null,
+              2
+            )
+          );
+          state.iteration = iter + 1;
+          state.score = score;
+          state.passed = passed;
+          if (score > (state.best_score ?? 0)) {
+            state.best_score = score;
+            state.best_iteration = iter;
+          }
+          writeLoopState(cwd, state);
+          res.text +=
+            `\n[fable-loop] iteration ${iter + 1}/${state.max} | score ${score}/${threshold} (合否は server 側で機械判定) | ` +
+            (passed
+              ? "✅ 合格 — ループはターン終了時に自動停止します"
+              : "❌ 未達 — feedback に従って修正し、再度 fable_review を呼んでください (state.json の直接編集は禁止)");
+        } catch (e) {
+          res.text += `\n[fable-loop] state 更新に失敗しました: ${e.message}`;
+        }
+      }
+    }
+
     return toToolResult(
       withRelayDirective(res, "レビュー結果", "指摘の file:line や重大度順を崩さないでください。対応方針はレビュー全文を提示した後に別記してください。")
     );
