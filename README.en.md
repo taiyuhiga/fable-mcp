@@ -50,11 +50,11 @@ python setup-all.py
 Codex-only convenience installers still exist:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.5/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.6/install.sh | bash
 ```
 
 ```powershell
-irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.5/install.ps1 | iex
+irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.7.6/install.ps1 | iex
 ```
 
 ```
@@ -112,7 +112,7 @@ Publishing to the public Cursor Marketplace is a separate review/submission step
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.5
+codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.7.6
 codex plugin add fable-mcp@fable-mcp
 ```
 

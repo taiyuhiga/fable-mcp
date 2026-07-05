@@ -10,7 +10,7 @@
     {
       "name": "fable-mcp",
       "description": "Use Claude Fable 5 as a read-only deep reasoning architect and evaluator from Claude Code.",
-      "version": "0.7.5",
+      "version": "0.7.6",
       "author": {
         "name": "Taiyu Higa",
         "url": "https://github.com/taiyuhiga"

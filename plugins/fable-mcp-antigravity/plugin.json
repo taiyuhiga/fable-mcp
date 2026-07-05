@@ -1,6 +1,6 @@
 {
   "name": "fable-mcp",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "Use Claude Fable 5 as a read-only deep reasoning architect and evaluator from Antigravity.",
   "author": {
     "name": "Taiyu Higa"

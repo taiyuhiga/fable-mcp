@@ -1,6 +1,6 @@
 param(
   [switch]$DryRun,
-  [string]$Ref = "v0.7.5",
+  [string]$Ref = "v0.7.6",
   [switch]$NoClaudeInstall,
   [switch]$NoApiKey
 )

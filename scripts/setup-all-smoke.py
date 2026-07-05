@@ -18,7 +18,9 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         home = Path(tmp)
         old_home = os.environ.get("HOME")
+        old_userprofile = os.environ.get("USERPROFILE")
         os.environ["HOME"] = str(home)
+        os.environ["USERPROFILE"] = str(home)
         try:
             cursor_result = setup_all.configure_cursor(ROOT)
             assert cursor_result["status"] == "ok", cursor_result
@@ -41,6 +43,10 @@ def main():
                 os.environ.pop("HOME", None)
             else:
                 os.environ["HOME"] = old_home
+            if old_userprofile is None:
+                os.environ.pop("USERPROFILE", None)
+            else:
+                os.environ["USERPROFILE"] = old_userprofile
 
     print("setup-all smoke ok")
 
