@@ -28,12 +28,12 @@ If you want to set up Codex from a terminal, use the command for your OS:
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.1/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.1/install.ps1 | iex
 ```
 
 The installer checks Node.js, Codex CLI, and the Claude Code CLI runtime, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. It does not install Claude Code CLI unless you explicitly pass the runtime-install flag. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
@@ -93,7 +93,7 @@ Prerequisites:
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.8.0
+codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.8.1
 codex plugin add fable-mcp@fable-mcp
 ```
 
