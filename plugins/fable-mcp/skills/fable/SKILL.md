@@ -1,12 +1,12 @@
 ---
 name: fable
-description: Use when the user mentions Fable, Fable5, Feyble, フェイブル, asks Codex to use Fable for planning/review, asks for Plan mode with Fable, or asks to run a quality/eval loop to a score threshold.
+description: Use whenever Codex is in Plan mode unless the user explicitly says without Fable/Fableなし; also use when the user mentions Fable, Fable5, Feyble, フェイブル, asks Codex to use Fable for planning/review, or asks to run a quality/eval loop to a score threshold.
 ---
 
 Use the `fable` MCP tools:
 
 - `fable_status` for setup checks and troubleshooting. It is local-only and does not call Fable or spend API credits.
-- `fable_plan` for implementation design. In Plan mode, use this unless the user explicitly says to plan without Fable.
+- `fable_plan` for implementation design. In Plan mode, call this first unless the user explicitly says to plan without Fable; do not wait for the user to mention Fable.
 - `fable_ask` for Fable-backed questions and tradeoff analysis.
 - `fable_review` for implementation review and quality-loop evaluation.
 - `fable_loop_approve` to start a quality loop after the user approves the generated criteria.
