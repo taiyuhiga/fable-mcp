@@ -3,7 +3,7 @@
 If the user gives you only this request:
 
 ```text
-https://github.com/taiyuhiga/fable-mcp をセットアップして。
+https://github.com/sam-mountainman/fable-mcp をセットアップして。
 ```
 
 treat it as a request to complete the setup for the AI agent/client that received the request. Do not stop at a README summary. Do not set up every supported client.

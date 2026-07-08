@@ -1,13 +1,13 @@
 param(
   [switch]$DryRun,
-  [string]$Ref = "v0.8.2",
+  [string]$Ref = "v0.8.3",
   [switch]$NoClaudeInstall,
   [switch]$InstallClaudeRuntime,
   [switch]$NoApiKey
 )
 
 $ErrorActionPreference = "Stop"
-$Repo = "taiyuhiga/fable-mcp"
+$Repo = "sam-mountainman/fable-mcp"
 $Plugin = "fable-mcp@fable-mcp"
 
 function Write-Step {

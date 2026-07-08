@@ -1,6 +1,6 @@
 # fable-mcp
 
-[![CI](https://github.com/taiyuhiga/fable-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/taiyuhiga/fable-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/sam-mountainman/fable-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/sam-mountainman/fable-mcp/actions/workflows/ci.yml)
 
 Use Claude Fable 5 as a read-only deep-reasoning architect and evaluator from Codex, Cursor, or Antigravity.
 
@@ -13,7 +13,7 @@ Short Japanese setup guide: [SETUP.md](SETUP.md)
 For beginners, the easiest path is to paste this one sentence into the AI agent you want to use. You do not need to clone the repository manually or fill the custom MCP form yourself.
 
 ```text
-Set up https://github.com/taiyuhiga/fable-mcp.
+Set up https://github.com/sam-mountainman/fable-mcp.
 ```
 
 When an AI agent receives that sentence, it should treat this README plus `AGENTS.md` as the setup contract and configure only its own client. If Codex receives the request, configure Codex only. If Cursor receives it, configure Cursor only. If Antigravity receives it, configure Antigravity only.
@@ -30,12 +30,12 @@ If you want to set up Codex from a terminal, use the command for your OS:
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.8.3/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.2/install.ps1 | iex
+irm https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.8.3/install.ps1 | iex
 ```
 
 The installer checks Node.js, Codex CLI, and the Claude Code CLI runtime, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. It does not install Claude Code CLI unless you explicitly pass the runtime-install flag. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
@@ -43,7 +43,7 @@ The installer checks Node.js, Codex CLI, and the Claude Code CLI runtime, instal
 For Cursor or Antigravity manual setup:
 
 ```sh
-git clone https://github.com/taiyuhiga/fable-mcp.git
+git clone https://github.com/sam-mountainman/fable-mcp.git
 cd fable-mcp
 npm install
 npm run build
@@ -95,7 +95,7 @@ Prerequisites:
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add taiyuhiga/fable-mcp --ref v0.8.2
+codex plugin marketplace add sam-mountainman/fable-mcp --ref v0.8.3
 codex plugin add fable-mcp@fable-mcp
 ```
 

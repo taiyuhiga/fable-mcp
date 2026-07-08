@@ -3,7 +3,7 @@
 使いたいAIエージェント本人に、この1行を貼ってください。
 
 ```text
-https://github.com/taiyuhiga/fable-mcp をセットアップして。
+https://github.com/sam-mountainman/fable-mcp をセットアップして。
 ```
 
 ## 重要なルール
@@ -21,19 +21,19 @@ https://github.com/taiyuhiga/fable-mcp をセットアップして。
 macOS / Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.8.3/install.sh | bash
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/taiyuhiga/fable-mcp/v0.8.2/install.ps1 | iex
+irm https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.8.3/install.ps1 | iex
 ```
 
 ### Cursorだけ
 
 ```sh
-git clone https://github.com/taiyuhiga/fable-mcp.git
+git clone https://github.com/sam-mountainman/fable-mcp.git
 cd fable-mcp
 npm install
 npm run build
@@ -43,7 +43,7 @@ node scripts/run-python.mjs scripts/setup-current-agent.py --client cursor
 ### Antigravityだけ
 
 ```sh
-git clone https://github.com/taiyuhiga/fable-mcp.git
+git clone https://github.com/sam-mountainman/fable-mcp.git
 cd fable-mcp
 npm install
 npm run build

@@ -1,13 +1,13 @@
 {
   "name": "fable-mcp",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "Use Claude Fable 5 as a deep-reasoning architect and evaluator inside OpenAI Codex.",
   "author": {
     "name": "Taiyu Higa",
     "url": "https://github.com/taiyuhiga"
   },
-  "homepage": "https://github.com/taiyuhiga/fable-mcp",
-  "repository": "https://github.com/taiyuhiga/fable-mcp",
+  "homepage": "https://github.com/sam-mountainman/fable-mcp",
+  "repository": "https://github.com/sam-mountainman/fable-mcp",
   "license": "MIT",
   "keywords": [
     "codex",
@@ -33,7 +33,7 @@
       "Local diagnostics",
       "Read-only repository exploration"
     ],
-    "websiteURL": "https://github.com/taiyuhiga/fable-mcp",
+    "websiteURL": "https://github.com/sam-mountainman/fable-mcp",
     "defaultPrompt": [
       "Fable5にこの設計をレビューさせて",
       "Plan mode: use Fable to plan this change",
