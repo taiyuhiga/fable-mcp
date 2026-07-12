@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REF="v0.9.0"
+REF="v0.9.1"
 REPO="sam-mountainman/fable-mcp"
 PLUGIN="fable-mcp@fable-mcp"
 DRY_RUN=0
@@ -15,11 +15,11 @@ usage() {
 Install fable-mcp for Codex.
 
 Usage:
-  ./install.sh [--dry-run] [--ref v0.9.0] [--auth auto|login|api] [--skip-auth]
+  ./install.sh [--dry-run] [--ref v0.9.1] [--auth auto|login|api] [--skip-auth]
 
 Options:
   --dry-run             Print commands without changing anything.
-  --ref <git-ref>       Git ref to install from. Default: v0.9.0.
+  --ref <git-ref>       Git ref to install from. Default: v0.9.1.
   --auth <mode>         Authentication mode: auto, login, or api (default: auto).
                         Interactive auto asks with Claude login first/default.
   --no-claude-install   Do not install Claude Code CLI automatically if missing.
@@ -175,10 +175,11 @@ ensure_claude() {
 
 install_plugin() {
   say "Installing fable-mcp Codex plugin from ${REPO}@${REF}"
-  if ! run codex plugin marketplace add "$REPO" --ref "$REF"; then
-    warn "marketplace add failed, trying marketplace upgrade for existing source"
-    run codex plugin marketplace upgrade fable-mcp || true
-  fi
+  # `marketplace upgrade` preserves an old pinned ref (for example v0.8.3).
+  # Remove both registrations first so the requested release is authoritative.
+  run codex plugin remove "$PLUGIN" || true
+  run codex plugin marketplace remove fable-mcp || true
+  run codex plugin marketplace add "$REPO" --ref "$REF"
   run codex plugin add "$PLUGIN"
 }
 

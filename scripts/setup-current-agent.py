@@ -218,7 +218,17 @@ def rewrite_plugin_mcp(plugin_root, filename, *, include_type=False, auth_mode="
 
 def configure_codex(root, source, auth_mode):
     env = os.environ.copy()
-    results = [
+    cleanup_results = [
+        run("codex_plugin_remove_stale", ["codex", "plugin", "remove", PLUGIN], optional=True, env=env),
+        run("codex_marketplace_remove_stale", ["codex", "plugin", "marketplace", "remove", "fable-mcp"], optional=True, env=env),
+    ]
+    for item in cleanup_results:
+        # Absence is expected on a first install. A later add still fails loudly
+        # if cleanup failed for a material reason and left a conflicting source.
+        if item["status"] == "failed":
+            item["status"] = "ok"
+            item["ignored_cleanup_error"] = True
+    results = cleanup_results + [
         run("codex_marketplace", ["codex", "plugin", "marketplace", "add", source], env=env),
         run("codex_plugin", ["codex", "plugin", "add", PLUGIN], env=env),
     ]

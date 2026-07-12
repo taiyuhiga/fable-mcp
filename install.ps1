@@ -1,6 +1,6 @@
 param(
   [switch]$DryRun,
-  [string]$Ref = "v0.9.0",
+  [string]$Ref = "v0.9.1",
   [switch]$NoClaudeInstall,
   [switch]$InstallClaudeRuntime,
   [ValidateSet("auto", "login", "api")][string]$Auth = "auto",
@@ -158,16 +158,19 @@ function Prepare-Helpers {
 
 function Install-Plugin {
   Write-Step "Installing fable-mcp Codex plugin from $Repo@$Ref"
+  # Marketplace upgrade preserves an old pinned ref. Remove stale registrations
+  # first so the requested release is installed even after v0.8.x.
   try {
-    Invoke-Step "codex" @("plugin", "marketplace", "add", $Repo, "--ref", $Ref)
+    Invoke-Step "codex" @("plugin", "remove", $Plugin)
   } catch {
-    Write-Warning "marketplace add failed, trying marketplace upgrade for existing source"
-    try {
-      Invoke-Step "codex" @("plugin", "marketplace", "upgrade", "fable-mcp")
-    } catch {
-      Write-Warning "marketplace upgrade also failed; continuing to plugin install"
-    }
+    Write-Host "No existing fable-mcp plugin registration to remove."
   }
+  try {
+    Invoke-Step "codex" @("plugin", "marketplace", "remove", "fable-mcp")
+  } catch {
+    Write-Host "No existing fable-mcp marketplace registration to remove."
+  }
+  Invoke-Step "codex" @("plugin", "marketplace", "add", $Repo, "--ref", $Ref)
   Invoke-Step "codex" @("plugin", "add", $Plugin)
 }
 
