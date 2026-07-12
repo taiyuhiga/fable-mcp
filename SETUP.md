@@ -12,7 +12,8 @@ https://github.com/sam-mountainman/fable-mcp をセットアップして。
 - Cursorに貼ったら、Cursorだけをセットアップします。
 - Antigravityに貼ったら、Antigravityだけをセットアップします。
 - Claude Code CLIはFableを呼ぶためのランタイムです。Claude Codeという別エージェントをセットアップするものではありません。
-- `claude` CLIがない場合も、勝手にインストールせず、必要なときだけ案内します。
+- `claude` CLIがなければセットアップ中に自動インストールします。
+- AskUserQuestionで、1番目の **Claudeアカウントログイン（推奨）** または2番目の **Anthropic APIキー（従量課金）** を選び、認証とFableの最小応答確認まで成功した場合だけセットアップ完了になります。
 
 ## 手動で実行する場合
 
@@ -21,13 +22,13 @@ https://github.com/sam-mountainman/fable-mcp をセットアップして。
 macOS / Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.8.3/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.0/install.sh | bash
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.8.3/install.ps1 | iex
+irm https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.0/install.ps1 | iex
 ```
 
 ### Cursorだけ
@@ -69,7 +70,7 @@ Fable5に聞いて: このリポジトリは何をするもの？
 ## 必要なもの
 
 - Node.js 18+
-- Fableを実際に呼ぶ場合だけ Claude Code CLI ランタイム: `npm i -g @anthropic-ai/claude-code`
+- Claude Code CLIランタイム（なければインストーラーが自動導入）
 - API課金で使う場合だけ `ANTHROPIC_API_KEY`
 
 `ANTHROPIC_API_KEY` を設定しない場合は、`claude` CLIの現在のログイン認証を使います。

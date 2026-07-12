@@ -1,6 +1,6 @@
 {
   "name": "fable-mcp",
-  "version": "0.8.3",
+  "version": "0.9.0",
   "description": "Codex, Cursor, and Antigravity plugin/MCP server that lets host agents consult Claude Fable 5 as a deep-reasoning architect via Claude Code headless mode",
   "type": "module",
   "main": "server.mjs",
@@ -9,10 +9,13 @@
   },
   "scripts": {
     "build": "esbuild server.mjs --bundle --platform=node --format=esm --outfile=dist/server.bundled.mjs && node scripts/sync-plugin.mjs",
-    "check": "node --check server.mjs && node --check hooks/fable-loop-stop.mjs && node --check hooks/fable-loop-prompt-submit.mjs && node --check hooks/inject-fable-instructions.mjs && node --check scripts/sync-plugin.mjs && node --check scripts/run-python.mjs && node --check scripts/fable-loop-smoke.mjs && node --check dist/server.bundled.mjs && node --check plugins/fable-mcp/dist/server.bundled.mjs && node --check plugins/fable-mcp-cursor/dist/server.bundled.mjs && node --check plugins/fable-mcp-antigravity/dist/server.bundled.mjs",
+    "check": "node --check server.mjs && node --check hooks/fable-loop-stop.mjs && node --check hooks/fable-loop-prompt-submit.mjs && node --check hooks/inject-fable-instructions.mjs && node --check scripts/sync-plugin.mjs && node --check scripts/run-python.mjs && node --check scripts/fable-loop-smoke.mjs && node --check scripts/verify-claude-auth.mjs && node --check scripts/configure-codex-plugin-env.mjs && node --check scripts/auth-setup-smoke.mjs && node --check scripts/model-effort-smoke.mjs && node --check dist/server.bundled.mjs && node --check plugins/fable-mcp/dist/server.bundled.mjs && node --check plugins/fable-mcp-cursor/dist/server.bundled.mjs && node --check plugins/fable-mcp-antigravity/dist/server.bundled.mjs",
     "smoke": "node scripts/fable-loop-smoke.mjs",
     "codex-smoke": "bash scripts/codex-plugin-install-smoke.sh",
     "agent-smoke": "node scripts/run-python.mjs scripts/setup-current-agent-smoke.py",
+    "auth-smoke": "node scripts/auth-setup-smoke.mjs",
+    "model-smoke": "node scripts/model-effort-smoke.mjs",
+    "installer-smoke": "bash scripts/installer-auth-smoke.sh",
     "live-trial": "bash scripts/codex-live-trial.sh"
   },
   "engines": {

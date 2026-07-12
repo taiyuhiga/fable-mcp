@@ -11,7 +11,7 @@
       "name": "fable-mcp",
       "source": "plugins/fable-mcp-cursor",
       "description": "Use Claude Fable 5 as a read-only deep reasoning architect and evaluator from Cursor.",
-      "version": "0.8.3",
+      "version": "0.9.0",
       "author": {
         "name": "Taiyu Higa"
       },

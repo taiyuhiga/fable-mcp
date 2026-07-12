@@ -20,25 +20,27 @@ When an AI agent receives that sentence, it should treat this README plus `AGENT
 
 1. Check that Node.js 18+ is installed
 2. Install only the fable-mcp plugin/MCP config for the requesting client
-3. Check whether Claude Code CLI (`claude`) exists as the Fable runtime, but do not install it unless the user explicitly asks
-4. Ask me only when ANTHROPIC_API_KEY is needed
-5. Leave me ready to ask: Check the Fable status
+3. Install Claude Code CLI (`claude`) automatically if the required Fable runtime is missing
+4. Use `AskUserQuestion` to offer **Claude account login (recommended)** first and **Anthropic API key (metered billing)** second, then complete the selected authentication
+5. Verify one minimal Fable response, then leave me ready to ask: Check the Fable status
 
-This repository ships a Codex Plugin, a Cursor Plugin, and an Antigravity Plugin. Setup is intentionally single-client: it does not fan out into other AI agents. Claude Code CLI is only the optional headless runtime used for Fable calls; it is not treated as another host agent to set up.
+This repository ships a Codex Plugin, a Cursor Plugin, and an Antigravity Plugin. Setup is intentionally single-client: it does not fan out into other AI agents. Claude Code CLI is the required headless runtime for Fable calls, but it is not configured as another host agent.
 
 If you want to set up Codex from a terminal, use the command for your OS:
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.8.3/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.0/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.8.3/install.ps1 | iex
+irm https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.0/install.ps1 | iex
 ```
 
-The installer checks Node.js, Codex CLI, and the Claude Code CLI runtime, installs the Codex Plugin, and optionally writes the Anthropic API key into the Codex plugin override. It does not install Claude Code CLI unless you explicitly pass the runtime-install flag. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
+The installer checks Node.js and Codex CLI, installs Claude Code CLI automatically when missing, and installs the Codex Plugin. It then offers Claude account login as option 1/default and Anthropic API-key billing as option 2, and requires a minimal live Fable response before reporting success. Agent-driven setup uses the structured `AskUserQuestion` UI. API keys are read without echo and are never passed in command arguments. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
+
+The final readiness check sends one minimal request to Fable. API-key mode incurs a small metered charge. Use `--skip-live-check` (`-SkipLiveCheck` in PowerShell) to verify auth state without that request, or `--skip-auth` (`-SkipAuth`) only when you intentionally want an incomplete plugin-only setup.
 
 For Cursor or Antigravity manual setup:
 
@@ -60,7 +62,7 @@ You -> Codex / Cursor / Antigravity (implementation agent)
           |
           | calls MCP tools when planning/review needs deeper reasoning
           v
-      fable-mcp -> claude -p --model claude-fable-5 --permission-mode plan
+      fable-mcp -> claude -p --model <selected model / Fable 5 default>
                        |
                        | reads the repository and thinks through the design
                        v
@@ -72,13 +74,23 @@ You -> Codex / Cursor / Antigravity (implementation agent)
 fable-mcp does not make Fable 5 the implementation agent. Each Fable tool call starts a Claude Code headless process like this:
 
 ```sh
-claude -p --model claude-fable-5 --permission-mode plan --output-format stream-json --verbose
+claude -p --model <model> --effort <level> --permission-mode plan --output-format stream-json --verbose
 ```
 
 - `--permission-mode plan` lets Fable read the local project for planning/review, but it cannot edit files.
 - The host agent remains responsible for implementation, tests, commits, and releases.
 - Tool calls are separate Claude Code processes. For follow-up brainstorming, pass the previous response's `session_id`; fable-mcp resumes the same Claude Code conversation with `--resume`.
 - If `ANTHROPIC_API_KEY` is set, calls use Anthropic API metered billing. Otherwise they use the current `claude` CLI login/session if available.
+
+## Models And Reasoning Effort
+
+`claude-fable-5` is the default. `fable_plan`, `fable_ask`, and `fable_review` accept per-call `model` and `effort` arguments.
+
+- Models are not hardcoded to a fixed list. Any safe Claude Code alias, full model ID, future model ID, or provider-style ID can be passed through.
+- Examples: `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-5`, `opus`, and `sonnet`.
+- The complete effort set is `low`, `medium`, `high`, `xhigh`, and `max`. Unsupported model/effort combinations are returned as Claude CLI errors instead of being silently downgraded.
+- Precedence: per-call `model` > `FABLE_MODEL` > `claude-fable-5`; per-call `effort` > `FABLE_EFFORT` > model default.
+- Quality-loop reviews automatically inherit the model selected during planning.
 
 ## Setup
 
@@ -89,13 +101,13 @@ Configure only the client that received the setup request.
 Prerequisites:
 
 - Node.js 18+
-- Claude Code CLI runtime, optional until the first Fable call: `npm i -g @anthropic-ai/claude-code`
-- Optional but recommended: an Anthropic API key with billing enabled
+- Claude Code CLI runtime (required for Fable calls; installed automatically by the standard installer when missing)
+- Optional: an Anthropic API key with billing enabled when metered billing is preferred over Claude account login
 
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add sam-mountainman/fable-mcp --ref v0.8.3
+codex plugin marketplace add sam-mountainman/fable-mcp --ref v0.9.0
 codex plugin add fable-mcp@fable-mcp
 ```
 
@@ -220,7 +232,7 @@ npm run live-trial -- --allow-model-call
 | Variable | Default | Meaning |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | unset | Use Anthropic API metered billing. If unset, use the current `claude` CLI auth/session. |
-| `FABLE_MODEL` | `claude-fable-5` | Model passed to `claude -p`. |
+| `FABLE_MODEL` | `claude-fable-5` | Default model. Per-call `model` overrides it; current and future Claude Code model IDs are accepted without a fixed allowlist. |
 | `FABLE_EFFORT` | model default, roughly high | Default reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`. Prefer `medium` for low-cost testing and per-call `max`/`xhigh` for important design work. |
 | `FABLE_MAX_TURNS` | `60` | Per-call exploration cap. `0` disables the cap. |
 | `FABLE_TIMEOUT_MS` | `1200000` | Per-call timeout. |

@@ -1,14 +1,19 @@
 param(
   [switch]$DryRun,
-  [string]$Ref = "v0.8.3",
+  [string]$Ref = "v0.9.0",
   [switch]$NoClaudeInstall,
   [switch]$InstallClaudeRuntime,
-  [switch]$NoApiKey
+  [ValidateSet("auto", "login", "api")][string]$Auth = "auto",
+  [switch]$NoApiKey,
+  [switch]$SkipAuth,
+  [switch]$SkipLiveCheck
 )
 
 $ErrorActionPreference = "Stop"
 $Repo = "sam-mountainman/fable-mcp"
 $Plugin = "fable-mcp@fable-mcp"
+$HelperDir = $PSScriptRoot
+$HelperTemp = $null
 
 function Write-Step {
   param([string]$Message)
@@ -110,15 +115,16 @@ function Ensure-Claude {
     return
   }
 
-  if ($NoClaudeInstall -or -not $InstallClaudeRuntime) {
-    Write-Warning "claude CLI not found. This installer configures only Codex, but Fable calls need the Claude Code CLI runtime."
-    Write-Warning "Install it separately only if you want this machine to call Fable: npm i -g @anthropic-ai/claude-code"
-    return
+  if ($NoClaudeInstall) {
+    if ($SkipAuth) {
+      Write-Warning "claude CLI not found and automatic installation was disabled."
+      return
+    }
+    throw "Fable calls require Claude Code CLI. Re-run without -NoClaudeInstall or use -SkipAuth for an intentionally incomplete setup."
   }
 
   if (-not (Test-Command "npm")) {
-    Write-Warning "npm not found, so Claude Code CLI cannot be installed automatically. Install it later with: npm i -g @anthropic-ai/claude-code"
-    return
+    throw "npm not found, so Claude Code CLI cannot be installed automatically. Install Node.js/npm and retry."
   }
 
   Write-Step "Installing Claude Code CLI"
@@ -127,11 +133,27 @@ function Ensure-Claude {
     if (Test-Command "claude") {
       Write-Host "Claude Code CLI OK: $(& claude --version)"
     } else {
-      Write-Warning "npm install finished, but 'claude' is still not on PATH. Open a new terminal or set FABLE_CLAUDE_BIN."
+      throw "npm install finished, but 'claude' is still not on PATH. Open a new terminal and retry, or set FABLE_CLAUDE_BIN."
     }
   } catch {
-    Write-Warning "Claude Code CLI install failed. Install manually with: npm i -g @anthropic-ai/claude-code"
+    throw "Claude Code CLI install failed: $($_.Exception.Message)"
   }
+}
+
+function Prepare-Helpers {
+  if ($SkipAuth) { return }
+  $verify = if ($PSScriptRoot) { Join-Path $PSScriptRoot "scripts/verify-claude-auth.mjs" } else { "" }
+  $configure = if ($PSScriptRoot) { Join-Path $PSScriptRoot "scripts/configure-codex-plugin-env.mjs" } else { "" }
+  if ($verify -and (Test-Path $verify) -and (Test-Path $configure)) {
+    $script:HelperDir = Join-Path $PSScriptRoot "scripts"
+    return
+  }
+
+  $script:HelperTemp = Join-Path ([IO.Path]::GetTempPath()) ("fable-mcp-" + [guid]::NewGuid().ToString("N"))
+  New-Item -ItemType Directory -Force -Path $script:HelperTemp | Out-Null
+  $script:HelperDir = $script:HelperTemp
+  Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/$Repo/$Ref/scripts/verify-claude-auth.mjs" -OutFile (Join-Path $script:HelperDir "verify-claude-auth.mjs")
+  Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/$Repo/$Ref/scripts/configure-codex-plugin-env.mjs" -OutFile (Join-Path $script:HelperDir "configure-codex-plugin-env.mjs")
 }
 
 function Install-Plugin {
@@ -149,44 +171,67 @@ function Install-Plugin {
   Invoke-Step "codex" @("plugin", "add", $Plugin)
 }
 
-function Configure-ApiKey {
-  if ($NoApiKey -or $DryRun) {
+function Configure-Auth {
+  if ($DryRun) {
+    return
+  }
+  if ($SkipAuth) {
+    Write-Warning "Authentication was skipped explicitly. Fable calls are not guaranteed to work."
     return
   }
 
-  Write-Step "Optional Anthropic API key setup"
-  $secure = Read-Host "Paste ANTHROPIC_API_KEY (leave blank to use your current claude CLI login/session)" -AsSecureString
-  $apiKey = ConvertTo-PlainText $secure
-  if ([string]::IsNullOrWhiteSpace($apiKey)) {
-    Write-Host "No API key written. If needed, run 'claude' login or add ANTHROPIC_API_KEY later."
+  $mode = if ($NoApiKey) { "login" } else { $Auth }
+  $apiKey = $env:ANTHROPIC_API_KEY
+  if ($mode -eq "auto") {
+    Write-Step "Choose Claude authentication"
+    Write-Host "1) Claude account login (recommended; opens browser)"
+    Write-Host "2) Anthropic API key (metered billing; subscription-independent)"
+    $choice = Read-Host "Select [1/2, default 1]"
+    $mode = if ($choice -eq "2") { "api" } else { "login" }
+  }
+
+  $verify = Join-Path $HelperDir "verify-claude-auth.mjs"
+  $liveArgs = if ($SkipLiveCheck) { @("--skip-live-check") } else { @() }
+
+  if ($mode -eq "login") {
+    Write-Step "Verifying Claude account authentication"
+    $previousApiKey = $env:ANTHROPIC_API_KEY
+    try {
+      Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
+      Invoke-Step "node" (@($verify, "--mode", "login") + $liveArgs)
+    } finally {
+      if ([string]::IsNullOrWhiteSpace($previousApiKey)) {
+        Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
+      } else {
+        $env:ANTHROPIC_API_KEY = $previousApiKey
+      }
+    }
+    $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
+    Invoke-Step "node" @((Join-Path $HelperDir "configure-codex-plugin-env.mjs"), "--config", (Join-Path $codexHome "config.toml"), "--remove-api-key")
     return
+  }
+
+  if ($mode -ne "api") { throw "Unsupported authentication mode: $mode" }
+  if ([string]::IsNullOrWhiteSpace($apiKey)) {
+    $secure = Read-Host "Paste ANTHROPIC_API_KEY (input hidden)" -AsSecureString
+    $apiKey = ConvertTo-PlainText $secure
+  }
+  if ([string]::IsNullOrWhiteSpace($apiKey)) { throw "API key authentication was selected, but no key was provided." }
+
+  Write-Step "Verifying Anthropic API authentication"
+  $previous = $env:ANTHROPIC_API_KEY
+  try {
+    $env:ANTHROPIC_API_KEY = $apiKey
+    Invoke-Step "node" (@($verify, "--mode", "api") + $liveArgs)
+  } finally {
+    $env:ANTHROPIC_API_KEY = $previous
   }
 
   $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
   $config = Join-Path $codexHome "config.toml"
-  $table = '[plugins."fable-mcp@fable-mcp".mcp_servers.fable.env]'
-
-  New-Item -ItemType Directory -Force -Path $codexHome | Out-Null
-  if (-not (Test-Path $config)) {
-    New-Item -ItemType File -Path $config | Out-Null
-  }
-
-  $content = Get-Content -Raw -Path $config
-  if ($content -split "`r?`n" | Where-Object { $_ -eq $table }) {
-    Write-Warning "fable-mcp plugin env table already exists in $config. Not overwriting it."
-    Write-Host "Make sure it contains ANTHROPIC_API_KEY and optionally FABLE_EFFORT."
-    return
-  }
-
-  Copy-Item $config "$config.bak.$(Get-Date -Format yyyyMMddHHmmss)"
-  $escaped = Escape-TomlString $apiKey
-  Add-Content -Path $config -Value @"
-
-$table
-ANTHROPIC_API_KEY = "$escaped"
-FABLE_EFFORT = "medium"
-"@
-  Write-Host "Wrote plugin env to $config"
+  $apiKey | & node (Join-Path $HelperDir "configure-codex-plugin-env.mjs") --config $config --effort medium
+  if ($LASTEXITCODE -ne 0) { throw "Could not persist ANTHROPIC_API_KEY in Codex config." }
+  $apiKey = $null
 }
 
 function Print-NextSteps {
@@ -202,7 +247,8 @@ function Print-NextSteps {
 Next steps:
 Installed/checked:
 - Codex Plugin/MCP: registers the fable MCP server for Codex.
-- Claude Code CLI runtime: checked only. It is not installed unless -InstallClaudeRuntime was passed.
+- Claude Code CLI runtime: installed automatically if it was missing.
+- Authentication: configured and verified unless -SkipAuth was passed.
 
 1. Restart the Codex app.
 2. If Codex asks whether to trust the bundled Stop hook, approve it.
@@ -210,12 +256,8 @@ Installed/checked:
 
    Fableの状態を確認して
 
-If the status says the claude CLI is missing, install the runtime separately with:
-
-   npm i -g @anthropic-ai/claude-code
-
-If the status says ANTHROPIC_API_KEY is missing, either add it to ~/.codex/config.toml
-or log in/configure the claude CLI runtime.
+The installer only reports success after Claude authentication and a minimal Fable access check,
+unless an explicit skip option was used.
 "@
 }
 
@@ -224,5 +266,7 @@ Ensure-Node
 Ensure-Codex
 Ensure-Claude
 Install-Plugin
-Configure-ApiKey
+Prepare-Helpers
+Configure-Auth
 Print-NextSteps
+if ($HelperTemp -and (Test-Path $HelperTemp)) { Remove-Item -Recurse -Force $HelperTemp }

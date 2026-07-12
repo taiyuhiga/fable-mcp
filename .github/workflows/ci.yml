@@ -24,13 +24,19 @@ jobs:
       - run: npm run smoke
       - run: npm run codex-smoke
       - run: npm run agent-smoke
+      - run: npm run auth-smoke
+      - run: npm run installer-smoke
       - name: Installer scripts parse
         shell: bash
         run: |
           bash -n install.sh
           bash -n scripts/codex-plugin-install-smoke.sh
           bash -n scripts/codex-live-trial.sh
+          bash -n scripts/installer-auth-smoke.sh
           node scripts/run-python.mjs -m py_compile scripts/setup-current-agent.py scripts/setup-current-agent-smoke.py
+          node --check scripts/verify-claude-auth.mjs
+          node --check scripts/configure-codex-plugin-env.mjs
+          node --check scripts/auth-setup-smoke.mjs
           if command -v pwsh >/dev/null 2>&1; then
             pwsh -NoProfile -Command '$null = [scriptblock]::Create((Get-Content -Raw install.ps1))'
           else

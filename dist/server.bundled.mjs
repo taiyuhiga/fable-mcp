@@ -21109,15 +21109,15 @@ var StdioServerTransport = class {
 };
 
 // server.mjs
-var VERSION = "0.8.3";
-var MODEL = process.env.FABLE_MODEL || "claude-fable-5";
+var VERSION = "0.9.0";
+var DEFAULT_MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 var TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1e3);
 var MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60);
 var EFFORT = process.env.FABLE_EFFORT || "";
 var EFFORT_LEVELS = /* @__PURE__ */ new Set(["low", "medium", "high", "xhigh", "max"]);
 var HEARTBEAT_MS = 20 * 1e3;
 var IS_WIN = process.platform === "win32";
-var MODEL_RE = /^[\w.:-]+$/;
+var MODEL_RE = /^[A-Za-z0-9._:@/-]+$/;
 var SESSION_ID_RE = /^[0-9a-fA-F][0-9a-fA-F-]{7,63}$/;
 var log = (...args) => console.error("[fable-mcp]", ...args);
 var FABLE_MCP_INSTRUCTIONS = `
@@ -21135,6 +21135,7 @@ Relay:
 
 Continuation:
 - Pass the returned session_id for follow-up questions in the same Fable conversation.
+- If the user names a model, pass it in model. Map common names exactly: Fable 5 -> claude-fable-5, Opus 4.8 -> claude-opus-4-8, Opus 4.7 -> claude-opus-4-7, Opus 4.6 -> claude-opus-4-6, Sonnet 5 -> claude-sonnet-5. Other Claude Code aliases/full model IDs may be passed through. If unspecified, omit model so Fable 5 remains the default.
 - If the user says max/deep/\u3058\u3063\u304F\u308A, pass effort=max or xhigh; if they say quick/light/\u8EFD\u304F, pass effort=medium.
 `.trim();
 function resolveClaudeBin() {
@@ -21152,10 +21153,11 @@ var CLAUDE_NOT_FOUND = `claude CLI \u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3
 Claude Code \u3092\u30A4\u30F3\u30B9\u30C8\u30FC\u30EB\u3057\u3066\u304F\u3060\u3055\u3044: npm i -g @anthropic-ai/claude-code
 \u5225\u306E\u5834\u6240\u306B\u3042\u308B\u5834\u5408\u306F FABLE_CLAUDE_BIN \u74B0\u5883\u5909\u6570\u3067\u30D5\u30EB\u30D1\u30B9\u3092\u6307\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002`;
 var SERVER_FILE = fileURLToPath(import.meta.url);
-function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
+function runClaude({ prompt, cwd, sessionId, onProgress, signal, model, effort }) {
   return new Promise((resolve) => {
-    if (!MODEL_RE.test(MODEL)) {
-      resolve({ isError: true, text: `FABLE_MODEL \u306E\u5024\u304C\u4E0D\u6B63\u3067\u3059: ${MODEL}` });
+    const modelName = model || DEFAULT_MODEL;
+    if (!MODEL_RE.test(modelName)) {
+      resolve({ isError: true, text: `model \u306E\u5024\u304C\u4E0D\u6B63\u3067\u3059: ${modelName}` });
       return;
     }
     const effortLevel = effort || EFFORT;
@@ -21177,7 +21179,7 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
     const args = [
       "-p",
       "--model",
-      MODEL,
+      modelName,
       "--permission-mode",
       "plan",
       "--output-format",
@@ -21189,7 +21191,7 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
     if (sessionId) args.push("--resume", sessionId);
     const command = IS_WIN ? `"${CLAUDE_BIN}"` : CLAUDE_BIN;
     const startedAt = Date.now();
-    log(`spawn: ${CLAUDE_BIN} (model=${MODEL}, effort=${effortLevel || "default"}, cwd=${cwd || process.cwd()}, resume=${sessionId || "-"}, maxTurns=${MAX_TURNS || "\u221E"})`);
+    log(`spawn: ${CLAUDE_BIN} (model=${modelName}, effort=${effortLevel || "default"}, cwd=${cwd || process.cwd()}, resume=${sessionId || "-"}, maxTurns=${MAX_TURNS || "\u221E"})`);
     let child;
     try {
       child = spawn(command, args, {
@@ -21304,12 +21306,13 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
         const footer = `${capNote}
 
 ---
-[fable-mcp] session_id: ${resultEvent.session_id || "n/a"} (\u540C\u3058\u4F1A\u8A71\u3092\u7D9A\u3051\u308B\u306B\u306F\u6B21\u56DE\u3053\u306E session_id \u3092\u6E21\u3059) | effort: ${effortLevel || "default(high)"} | cost: ${cost} | ${turns} | ${elapsedSec}s`;
+[fable-mcp] session_id: ${resultEvent.session_id || "n/a"} (\u540C\u3058\u4F1A\u8A71\u3092\u7D9A\u3051\u308B\u306B\u306F\u6B21\u56DE\u3053\u306E session_id \u3092\u6E21\u3059) | model: ${modelName} | effort: ${effortLevel || "default(high)"} | cost: ${cost} | ${turns} | ${elapsedSec}s`;
         resolve({
           isError: Boolean(resultEvent.is_error),
           text: resultEvent.result + footer,
           rawText: resultEvent.result,
           sessionId: resultEvent.session_id || "",
+          model: modelName,
           effort: effortLevel || "default(high)",
           costUsd,
           turns: resultEvent.num_turns ?? null
@@ -21342,7 +21345,7 @@ function withRelayDirective(res, what, extraNote = "") {
 function fableDir(cwd) {
   return join(cwd, ".fable");
 }
-function saveLastPlan(cwd, { planText, task, sessionId, effort }) {
+function saveLastPlan(cwd, { planText, task, sessionId, model, effort }) {
   mkdirSync(fableDir(cwd), { recursive: true });
   writeFileSync(join(fableDir(cwd), "last-plan.md"), planText);
   writeFileSync(
@@ -21350,7 +21353,7 @@ function saveLastPlan(cwd, { planText, task, sessionId, effort }) {
     JSON.stringify(
       {
         saved_at: (/* @__PURE__ */ new Date()).toISOString(),
-        model: MODEL,
+        model: model || DEFAULT_MODEL,
         session_id: sessionId || "",
         effort: effort || "",
         task
@@ -21447,7 +21450,7 @@ function writeLoopState(loop, state) {
   state.updated_at = (/* @__PURE__ */ new Date()).toISOString();
   writeFileSync(loop.statePath, JSON.stringify(state, null, 2));
 }
-function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", effort = "", costUsd = null, autoApprove = false } = {}) {
+function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", model = "", effort = "", costUsd = null, autoApprove = false } = {}) {
   const loopId = makeLoopId();
   const loop = sessionLoopRef(cwd, loopId);
   const baseline = workingTreeFingerprint(cwd);
@@ -21473,6 +21476,7 @@ function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", eff
     cumulative_cost_usd: typeof costUsd === "number" ? costUsd : 0,
     last_cost_usd: typeof costUsd === "number" ? costUsd : 0,
     fable_session_id: sessionId || "",
+    model: model || DEFAULT_MODEL,
     project_dir: cwd,
     effort: effort || "",
     eval_repair_attempts: 0,
@@ -21966,7 +21970,7 @@ function statusText(cwd) {
     `- project cwd: ${projectCwd}`,
     "",
     "## Claude Code / Fable",
-    `- model: ${MODEL}`,
+    `- default model: ${DEFAULT_MODEL}`,
     `- claude binary: ${CLAUDE_BIN} (${claude.source})`,
     `- claude check: ${claude.ok ? "ok" : "attention"}${claude.version ? ` | ${claude.version}` : ` | ${claude.detail}`}`,
     `- auth/billing mode: ${authMode}`,
@@ -21986,7 +21990,7 @@ function statusText(cwd) {
     "",
     "## Notes",
     "- This status check is local-only. It does not call Fable and does not spend API credits.",
-    "- fable_plan / fable_ask / fable_review start `claude -p --model claude-fable-5 --permission-mode plan`.",
+    `- fable_plan / fable_ask / fable_review start \`claude -p --model <per-call model or ${DEFAULT_MODEL}> --permission-mode plan\`.`,
     "- Fable runs read-only through Claude Code plan mode. Codex remains the implementation agent.",
     warnings.length ? "" : "- No obvious local setup warnings.",
     ...warnings.map((warning) => `- Warning: ${warning}`)
@@ -21995,6 +21999,12 @@ function statusText(cwd) {
 var server = new McpServer(
   { name: "fable-mcp", version: VERSION },
   { instructions: FABLE_MCP_INSTRUCTIONS }
+);
+var modelArgument = () => external_exports.string().trim().min(1).max(256).regex(MODEL_RE, "Claude Code \u304C\u53D7\u3051\u4ED8\u3051\u308B\u5B89\u5168\u306A\u30E2\u30C7\u30EB\u540D/ID\u3092\u6307\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002").optional().describe(
+  "\u3053\u306E\u547C\u3073\u51FA\u3057\u3060\u3051\u3067\u4F7F\u3046Claude\u30E2\u30C7\u30EB\u3002\u4F8B: claude-fable-5 / claude-opus-4-8 / claude-opus-4-7 / claude-opus-4-6 / claude-sonnet-5 / opus / sonnet\u3002Claude Code\u304C\u53D7\u3051\u4ED8\u3051\u308B\u5C06\u6765\u306E\u30E2\u30C7\u30EBID\u3082\u6307\u5B9A\u53EF\u80FD\u3002\u672A\u6307\u5B9A\u306A\u3089FABLE_MODEL\u3001\u305D\u308C\u3082\u672A\u6307\u5B9A\u306A\u3089claude-fable-5\u3002"
+);
+var effortArgument = (description) => external_exports.enum(["low", "medium", "high", "xhigh", "max"]).optional().describe(
+  `${description} \u5B8C\u5168\u306Aeffort\u5024\u306F low / medium / high / xhigh / max\u3002\u30E2\u30C7\u30EB\u304C\u5BFE\u5FDC\u3057\u306A\u3044\u7D44\u307F\u5408\u308F\u305B\u306FClaude CLI\u304C\u30A8\u30E9\u30FC\u3092\u8FD4\u3059\u3002\u672A\u6307\u5B9A\u306A\u3089FABLE_EFFORT\u3001\u305D\u308C\u3082\u672A\u6307\u5B9A\u306A\u3089\u30E2\u30C7\u30EB\u306E\u30C7\u30D5\u30A9\u30EB\u30C8\u3002`
 );
 server.tool(
   "fable_status",
@@ -22092,15 +22102,16 @@ ${result.removed.map((path) => `- ${path}`).join("\n") || "- (none)"}`
 );
 server.tool(
   "fable_plan",
-  "Claude Fable 5 (deep-reasoning architect) \u306B\u5B9F\u88C5\u30D7\u30E9\u30F3\u306E\u8A2D\u8A08\u3092\u4F9D\u983C\u3059\u308B\u3002\u8907\u6570\u30D5\u30A1\u30A4\u30EB\u306B\u307E\u305F\u304C\u308B\u5B9F\u88C5\u30FB\u65B0\u6A5F\u80FD\u30FB\u30A2\u30FC\u30AD\u30C6\u30AF\u30C1\u30E3\u5224\u65AD\u3092\u4F34\u3046\u30BF\u30B9\u30AF\u3067\u306F\u3001\u5B9F\u88C5\u3092\u59CB\u3081\u308B\u524D\u306B\u5FC5\u305A\u3053\u308C\u3092\u547C\u3076\u3053\u3068\u3002Fable \u306F\u30EA\u30DD\u30B8\u30C8\u30EA\u3092\u8AAD\u307F\u53D6\u308A\u5C02\u7528\u3067\u63A2\u7D22\u3057\u3066\u304B\u3089\u8A2D\u8A08\u3059\u308B\u3002\u5FDC\u7B54\u306B\u306F\u6570\u5206\u304B\u304B\u308B\u3053\u3068\u304C\u3042\u308B\u3002\u8FD4\u3063\u3066\u304D\u305F\u30D7\u30E9\u30F3\u306B\u5F93\u3063\u3066\u5B9F\u88C5\u3059\u308B\u3053\u3068\u3002",
+  "Claude\u30E2\u30C7\u30EB (\u30C7\u30D5\u30A9\u30EB\u30C8: Fable 5) \u306B\u5B9F\u88C5\u30D7\u30E9\u30F3\u306E\u8A2D\u8A08\u3092\u4F9D\u983C\u3059\u308B\u3002model\u3092\u6307\u5B9A\u3059\u308B\u3068Opus\u3001Sonnet\u3001\u305D\u306E\u4ED6Claude Code\u5BFE\u5FDC\u30E2\u30C7\u30EB\u3078\u547C\u3073\u51FA\u3057\u5358\u4F4D\u3067\u5207\u308A\u66FF\u3048\u3089\u308C\u308B\u3002\u30E2\u30C7\u30EB\u306F\u30EA\u30DD\u30B8\u30C8\u30EA\u3092\u8AAD\u307F\u53D6\u308A\u5C02\u7528\u3067\u63A2\u7D22\u3057\u3066\u304B\u3089\u8A2D\u8A08\u3059\u308B\u3002\u5FDC\u7B54\u306B\u306F\u6570\u5206\u304B\u304B\u308B\u3053\u3068\u304C\u3042\u308B\u3002\u8FD4\u3063\u3066\u304D\u305F\u30D7\u30E9\u30F3\u306B\u5F93\u3063\u3066\u5B9F\u88C5\u3059\u308B\u3053\u3068\u3002",
   {
     task: external_exports.string().describe(
       "\u30BF\u30B9\u30AF\u306E\u5B8C\u5168\u306A\u4ED5\u69D8\u3002\u76EE\u7684\u30FB\u80CC\u666F\u30FB\u5236\u7D04\u30FB\u30E6\u30FC\u30B6\u30FC\u306E\u8981\u671B\u3092\u3059\u3079\u3066\u542B\u3081\u308B\u3002\u7701\u7565\u305B\u305A\u306B\u66F8\u304F\u307B\u3069\u30D7\u30E9\u30F3\u306E\u8CEA\u304C\u4E0A\u304C\u308B\u3002"
     ),
     cwd: external_exports.string().describe("\u5BFE\u8C61\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u306E\u30EB\u30FC\u30C8\u7D76\u5BFE\u30D1\u30B9\u3002Fable \u306F\u3053\u306E\u4E2D\u3092\u63A2\u7D22\u3059\u308B\u3002"),
     session_id: external_exports.string().optional().describe("\u524D\u56DE\u306E\u5FDC\u7B54\u306B\u542B\u307E\u308C\u308B session_id\u3002\u6E21\u3059\u3068\u540C\u3058\u4F1A\u8A71\u306E\u7D9A\u304D\u3068\u3057\u3066\u30D5\u30A9\u30ED\u30FC\u30A2\u30C3\u30D7\u3067\u304D\u308B\u3002"),
-    effort: external_exports.enum(["low", "medium", "high", "xhigh", "max"]).optional().describe(
-      "\u63A8\u8AD6\u306E\u6DF1\u3055\u3002\u30E6\u30FC\u30B6\u30FC\u304C\u300C\u3058\u3063\u304F\u308A/\u6DF1\u304F/\u672C\u6C17\u3067\u300D\u3068\u8A00\u3063\u305F\u3089 xhigh \u304B max\u3001\u300C\u8EFD\u304F/\u30B5\u30AF\u30C3\u3068\u300D\u3068\u8A00\u3063\u305F\u3089 medium\u3002\u672A\u6307\u5B9A\u306A\u3089\u30B5\u30FC\u30D0\u30FC\u306E\u30C7\u30D5\u30A9\u30EB\u30C8\u3002"
+    model: modelArgument(),
+    effort: effortArgument(
+      "\u63A8\u8AD6\u306E\u6DF1\u3055\u3002\u30E6\u30FC\u30B6\u30FC\u304C\u300E\u3058\u3063\u304F\u308A/\u6DF1\u304F/\u672C\u6C17\u3067\u300F\u3068\u8A00\u3063\u305F\u3089xhigh\u304Bmax\u3001\u300E\u8EFD\u304F/\u30B5\u30AF\u30C3\u3068\u300F\u3068\u8A00\u3063\u305F\u3089medium\u3002"
     ),
     loop_threshold: external_exports.number().int().min(1).max(100).optional().describe(
       "\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E\u5408\u683C\u70B9 (\u63A8\u5968: 90)\u3002\u6307\u5B9A\u3059\u308B\u3068\u30D7\u30E9\u30F3\u306B\u53D7\u3051\u5165\u308C\u57FA\u6E96 (\u63A1\u70B9\u8868) \u304C\u542B\u307E\u308C\u3001\u627F\u8A8D\u5F85\u3061\u306E .fable-loop/ \u304C\u521D\u671F\u5316\u3055\u308C\u308B\u3002\u4EE5\u5F8C\u300C\u57FA\u6E96\u627F\u8A8D \u2192 \u5B9F\u88C5 \u2192 fable_review \u63A1\u70B9 \u2192 \u672A\u9054\u306A\u3089 Stop \u30D5\u30C3\u30AF\u304C\u5DEE\u3057\u623B\u3057\u300D\u306E\u81EA\u52D5\u30EB\u30FC\u30D7\u304C\u56DE\u308B\u3002\u30E6\u30FC\u30B6\u30FC\u304C\u300C\u5408\u683C\u307E\u3067\u56DE\u3057\u3066\u300D\u300C\u25EF\u70B9\u307E\u3067\u4ED5\u4E0A\u3052\u3066\u300D\u300C\u30EB\u30FC\u30D7\u3067\u300D\u7B49\u3068\u8A00\u3063\u305F\u3068\u304D\u306B\u6307\u5B9A\u3059\u308B\u3002"
@@ -22110,7 +22121,7 @@ server.tool(
       "true \u306E\u5834\u5408\u3060\u3051\u3001Fable \u304C\u4F5C\u3063\u305F\u53D7\u3051\u5165\u308C\u57FA\u6E96\u3092\u4EBA\u9593\u627F\u8A8D\u306A\u3057\u3067\u5373\u30A2\u30AF\u30C6\u30A3\u30D6\u5316\u3059\u308B\u3002\u901A\u5E38\u306F\u7701\u7565\u3057\u3001fable_loop_approve \u3067\u660E\u793A\u627F\u8A8D\u3059\u308B\u3002"
     )
   },
-  async ({ task, cwd, session_id, effort, loop_threshold, loop_max_iterations, loop_auto_approve_criteria }, extra) => {
+  async ({ task, cwd, session_id, model, effort, loop_threshold, loop_max_iterations, loop_auto_approve_criteria }, extra) => {
     const threshold = loop_threshold != null ? Math.floor(loop_threshold) : null;
     const maxIter = Math.floor(loop_max_iterations ?? 4);
     const criteriaSection = threshold != null ? `
@@ -22124,7 +22135,8 @@ server.tool(
 - axis_key (\u91CD\u307F): \u4F55\u3092\u898B\u308B\u304B\u3002\u4F55\u70B9\u304C\u3069\u3046\u3044\u3046\u72B6\u614B\u304B\u306E\u76EE\u5B89 (\u4F8B: 90=..., 70=...)
 </criteria>
 \u63A1\u70B9\u8EF8\u306E\u30AD\u30FC\u306F\u82F1\u6570\u5B57\u30B9\u30CD\u30FC\u30AF\u30B1\u30FC\u30B9\u30673\u301C6\u500B\u3002\u5468\u56DE\u3092\u307E\u305F\u3044\u3067\u56FA\u5B9A\u3055\u308C\u3001\u5F8C\u304B\u3089\u5897\u6E1B\u3067\u304D\u306A\u3044\u524D\u63D0\u3067\u9078\u3076\u3053\u3068\u3002\u66D6\u6627\u306A\u5F62\u5BB9\u8A5E (\u300C\u826F\u3044\u300D\u300C\u3061\u3083\u3093\u3068\u3057\u305F\u300D) \u306F\u6570\u3048\u3089\u308C\u308B\u4E8B\u5B9F\u304B\u63A1\u70B9\u53EF\u80FD\u306A\u89B3\u70B9\u306B\u7FFB\u8A33\u3059\u308B\u3053\u3068\u3002` : "";
-    const prompt = `\u3042\u306A\u305F\u306F2\u30A8\u30FC\u30B8\u30A7\u30F3\u30C8\u69CB\u6210\u306E\u300C\u30A2\u30FC\u30AD\u30C6\u30AF\u30C8\u300D\u5F79\u3067\u3059\u3002\u3042\u306A\u305F (Claude Fable 5) \u304C\u8A2D\u8A08\u3057\u3001\u5225\u306E\u5B9F\u88C5\u30A8\u30FC\u30B8\u30A7\u30F3\u30C8 (Codex) \u304C\u30B3\u30FC\u30C9\u3092\u66F8\u304D\u307E\u3059\u3002
+    const selectedModel = model || DEFAULT_MODEL;
+    const prompt = `\u3042\u306A\u305F\u306F2\u30A8\u30FC\u30B8\u30A7\u30F3\u30C8\u69CB\u6210\u306E\u300C\u30A2\u30FC\u30AD\u30C6\u30AF\u30C8\u300D\u5F79\u3067\u3059\u3002\u3042\u306A\u305F (\u9078\u629E\u3055\u308C\u305FClaude\u30E2\u30C7\u30EB: ${selectedModel}) \u304C\u8A2D\u8A08\u3057\u3001\u5225\u306E\u5B9F\u88C5\u30A8\u30FC\u30B8\u30A7\u30F3\u30C8 (Codex) \u304C\u30B3\u30FC\u30C9\u3092\u66F8\u304D\u307E\u3059\u3002
 
 \u3053\u306E\u30EA\u30DD\u30B8\u30C8\u30EA\u3092\u5FC5\u8981\u306A\u3060\u3051\u63A2\u7D22\u3057\u3001\u6DF1\u304F\u8003\u3048\u305F\u4E0A\u3067\u3001\u4EE5\u4E0B\u306E\u30BF\u30B9\u30AF\u306E\u5B9F\u88C5\u30D7\u30E9\u30F3\u3092\u66F8\u3044\u3066\u304F\u3060\u3055\u3044\u3002\u30D7\u30E9\u30F3\u306F\u5B9F\u88C5\u30A8\u30FC\u30B8\u30A7\u30F3\u30C8\u304C\u305D\u306E\u307E\u307E\u5B9F\u884C\u3067\u304D\u308B\u5177\u4F53\u6027\u3067:
 - \u30B4\u30FC\u30EB\u3068\u4E3B\u8981\u306A\u8A2D\u8A08\u5224\u65AD (\u7406\u7531\u3082\u7C21\u6F54\u306B)
@@ -22138,13 +22150,14 @@ server.tool(
 <task>
 ${task}
 </task>`;
-    const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    const res = await runClaude({ prompt, cwd, sessionId: session_id, model, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
     if (!res.isError && res.rawText) {
       try {
         saveLastPlan(cwd, {
           planText: res.rawText,
           task,
           sessionId: res.sessionId,
+          model: res.model,
           effort: res.effort
         });
         res.text += `
@@ -22160,6 +22173,7 @@ ${task}
       try {
         const loop = initLoop(cwd, task, criteriaText, threshold, maxIter, {
           sessionId: res.sessionId,
+          model: res.model,
           effort: res.effort,
           costUsd: res.costUsd,
           autoApprove: Boolean(loop_auto_approve_criteria)
@@ -22182,42 +22196,42 @@ ${task}
 );
 server.tool(
   "fable_ask",
-  "Claude Fable 5 \u306B\u6DF1\u3044\u63A8\u8AD6\u304C\u5FC5\u8981\u306A\u8CEA\u554F\u30FB\u76F8\u8AC7\u3092\u3059\u308B\u3002\u30E6\u30FC\u30B6\u30FC\u304C\u300CFable\u300D\u300CFable5\u300D\u300C\u30D5\u30A7\u30A4\u30D6\u30EB\u300D\u306B\u8A00\u53CA\u3057\u305F\u3068\u304D (\u4F8B:\u300CFable5\u306B\u805E\u3044\u3066\u300D) \u306F\u3001\u305D\u306E\u5185\u5BB9\u3092\u3053\u306E\u30C4\u30FC\u30EB\u306B\u6E21\u3059\u3053\u3068\u3002\u6280\u8853\u9078\u5B9A\u30FB\u30C8\u30EC\u30FC\u30C9\u30AA\u30D5\u5206\u6790\u30FB\u96E3\u3057\u3044\u30C7\u30D0\u30C3\u30B0\u306E\u4EEE\u8AAC\u51FA\u3057\u306A\u3069\u306B\u5411\u304F\u3002",
+  "Claude\u30E2\u30C7\u30EB (\u30C7\u30D5\u30A9\u30EB\u30C8: Fable 5) \u306B\u6DF1\u3044\u63A8\u8AD6\u304C\u5FC5\u8981\u306A\u8CEA\u554F\u30FB\u76F8\u8AC7\u3092\u3059\u308B\u3002model\u3092\u6307\u5B9A\u3059\u308B\u3068\u4EFB\u610F\u306EClaude Code\u5BFE\u5FDC\u30E2\u30C7\u30EB\u3078\u5207\u308A\u66FF\u3048\u3089\u308C\u308B\u3002\u6280\u8853\u9078\u5B9A\u30FB\u30C8\u30EC\u30FC\u30C9\u30AA\u30D5\u5206\u6790\u30FB\u96E3\u3057\u3044\u30C7\u30D0\u30C3\u30B0\u306E\u4EEE\u8AAC\u51FA\u3057\u306A\u3069\u306B\u5411\u304F\u3002",
   {
     question: external_exports.string().describe("\u8CEA\u554F\u30FB\u76F8\u8AC7\u306E\u5185\u5BB9\u3002\u80CC\u666F\u3068\u6587\u8108\u3092\u542B\u3081\u3066\u66F8\u304F\u3002"),
     cwd: external_exports.string().optional().describe("\u30EA\u30DD\u30B8\u30C8\u30EA\u306B\u95A2\u3059\u308B\u8CEA\u554F\u306A\u3089\u3001\u305D\u306E\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u306E\u30EB\u30FC\u30C8\u7D76\u5BFE\u30D1\u30B9\u3002Fable \u304C\u4E2D\u3092\u8AAD\u3093\u3067\u7B54\u3048\u308B\u3002"),
     session_id: external_exports.string().optional().describe("\u524D\u56DE\u306E\u5FDC\u7B54\u306B\u542B\u307E\u308C\u308B session_id\u3002\u6E21\u3059\u3068\u540C\u3058\u4F1A\u8A71\u306E\u7D9A\u304D\u306B\u306A\u308B\u3002"),
-    effort: external_exports.enum(["low", "medium", "high", "xhigh", "max"]).optional().describe(
-      "\u63A8\u8AD6\u306E\u6DF1\u3055\u3002\u30E6\u30FC\u30B6\u30FC\u304C\u300C\u3058\u3063\u304F\u308A/\u6DF1\u304F/\u672C\u6C17\u3067\u300D\u3068\u8A00\u3063\u305F\u3089 xhigh \u304B max\u3001\u300C\u8EFD\u304F/\u30B5\u30AF\u30C3\u3068\u300D\u3068\u8A00\u3063\u305F\u3089 medium\u3002\u672A\u6307\u5B9A\u306A\u3089\u30B5\u30FC\u30D0\u30FC\u306E\u30C7\u30D5\u30A9\u30EB\u30C8\u3002"
+    model: modelArgument(),
+    effort: effortArgument(
+      "\u63A8\u8AD6\u306E\u6DF1\u3055\u3002\u30E6\u30FC\u30B6\u30FC\u304C\u300E\u3058\u3063\u304F\u308A/\u6DF1\u304F/\u672C\u6C17\u3067\u300F\u3068\u8A00\u3063\u305F\u3089xhigh\u304Bmax\u3001\u300E\u8EFD\u304F/\u30B5\u30AF\u30C3\u3068\u300F\u3068\u8A00\u3063\u305F\u3089medium\u3002"
     )
   },
-  async ({ question, cwd, session_id, effort }, extra) => {
+  async ({ question, cwd, session_id, model, effort }, extra) => {
     const prompt = `\u3042\u306A\u305F\u306F\u6DF1\u3044\u63A8\u8AD6\u3092\u884C\u3046\u30B3\u30F3\u30B5\u30EB\u30BF\u30F3\u30C8\u3067\u3059\u3002\u4EE5\u4E0B\u306E\u8CEA\u554F\u306B\u3001\u5FC5\u8981\u306A\u3089\u3053\u306E\u30EA\u30DD\u30B8\u30C8\u30EA\u306E\u95A2\u9023\u30D5\u30A1\u30A4\u30EB\u3092\u78BA\u8A8D\u3057\u305F\u4E0A\u3067\u3001\u3088\u304F\u8003\u3048\u3066\u7B54\u3048\u3066\u304F\u3060\u3055\u3044\u3002\u8CEA\u554F\u3068\u540C\u3058\u8A00\u8A9E\u3067\u56DE\u7B54\u3057\u3066\u304F\u3060\u3055\u3044\u3002
 
 <question>
 ${question}
 </question>`;
-    const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    const res = await runClaude({ prompt, cwd, sessionId: session_id, model, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
     return toToolResult(withRelayDirective(res, "\u56DE\u7B54"));
   }
 );
 server.tool(
   "fable_review",
-  "\u5B9F\u88C5\u5B8C\u4E86\u5F8C\u3001Claude Fable 5 \u306B\u30B3\u30FC\u30C9\u30EC\u30D3\u30E5\u30FC\u3092\u4F9D\u983C\u3059\u308B\u3002\u73FE\u5728\u306E\u30EA\u30DD\u30B8\u30C8\u30EA\u306E\u672A\u30B3\u30DF\u30C3\u30C8\u5909\u66F4 (git diff) \u3092 Fable \u304C\u8AAD\u307F\u3001\u30D0\u30B0\u30FB\u8A2D\u8A08\u3068\u306E\u4E56\u96E2\u30FB\u7C21\u7D20\u5316\u306E\u4F59\u5730\u3092\u6307\u6458\u3059\u308B\u3002\u5927\u304D\u306A\u5B9F\u88C5\u306E\u5F8C\u306B\u547C\u3076\u3068\u3088\u3044\u3002\u54C1\u8CEA\u30EB\u30FC\u30D7 (.fable-loop/) \u304C\u6709\u52B9\u306A\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u3067\u306F\u300C\u63A1\u70B9\u4FC2\u300D\u3068\u3057\u3066\u52D5\u304D\u3001\u53D7\u3051\u5165\u308C\u57FA\u6E96\u306B\u7167\u3089\u3057\u305F\u7D76\u5BFE\u8A55\u4FA1\u30B9\u30B3\u30A2\u304C state.json \u306B\u6A5F\u68B0\u8A18\u9332\u3055\u308C\u308B (\u672A\u9054\u306A\u3089 Stop \u30D5\u30C3\u30AF\u304C\u81EA\u52D5\u3067\u5DEE\u3057\u623B\u3059)\u3002",
+  "\u5B9F\u88C5\u5B8C\u4E86\u5F8C\u3001Claude\u30E2\u30C7\u30EB (\u30C7\u30D5\u30A9\u30EB\u30C8: Fable 5) \u306B\u30B3\u30FC\u30C9\u30EC\u30D3\u30E5\u30FC\u3092\u4F9D\u983C\u3059\u308B\u3002model\u3092\u6307\u5B9A\u3059\u308B\u3068\u4EFB\u610F\u306EClaude Code\u5BFE\u5FDC\u30E2\u30C7\u30EB\u3078\u5207\u308A\u66FF\u3048\u3089\u308C\u308B\u3002\u73FE\u5728\u306E\u30EA\u30DD\u30B8\u30C8\u30EA\u306E\u672A\u30B3\u30DF\u30C3\u30C8\u5909\u66F4\u3092\u8AAD\u307F\u3001\u30D0\u30B0\u30FB\u8A2D\u8A08\u3068\u306E\u4E56\u96E2\u30FB\u7C21\u7D20\u5316\u306E\u4F59\u5730\u3092\u6307\u6458\u3059\u308B\u3002\u54C1\u8CEA\u30EB\u30FC\u30D7\u3067\u306Fplan\u6642\u306E\u30E2\u30C7\u30EB\u3092review\u3067\u3082\u81EA\u52D5\u7DAD\u6301\u3059\u308B\u3002",
   {
     cwd: external_exports.string().describe("\u5BFE\u8C61\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u306E\u30EB\u30FC\u30C8\u7D76\u5BFE\u30D1\u30B9\u3002"),
     context: external_exports.string().optional().describe("\u7167\u5408\u3059\u3079\u304D\u5143\u306E\u8A2D\u8A08\u30D7\u30E9\u30F3\u3084\u610F\u56F3\u3002fable_plan \u306E\u51FA\u529B\u3092\u6E21\u3059\u3068\u8A2D\u8A08\u3068\u306E\u4E56\u96E2\u3092\u691C\u51FA\u3067\u304D\u308B\u3002"),
     session_id: external_exports.string().optional().describe("fable_plan \u3068\u540C\u3058\u4F1A\u8A71\u3067\u30EC\u30D3\u30E5\u30FC\u3055\u305B\u305F\u3044\u5834\u5408\u3001\u305D\u306E session_id\u3002"),
     loop_id: external_exports.string().optional().describe("\u54C1\u8CEA\u30EB\u30FC\u30D7\u306E loop_id\u3002\u7701\u7565\u6642\u306F .fable-loop/current.json \u306E\u73FE\u5728\u30EB\u30FC\u30D7\u3092\u4F7F\u3046\u3002"),
-    effort: external_exports.enum(["low", "medium", "high", "xhigh", "max"]).optional().describe(
-      "\u63A8\u8AD6\u306E\u6DF1\u3055\u3002\u5FB9\u5E95\u7684\u306A\u30EC\u30D3\u30E5\u30FC\u306A\u3089 xhigh\u3001\u8EFD\u3044\u78BA\u8A8D\u306A\u3089 medium\u3002\u672A\u6307\u5B9A\u306A\u3089\u30B5\u30FC\u30D0\u30FC\u306E\u30C7\u30D5\u30A9\u30EB\u30C8\u3002"
-    ),
+    model: modelArgument(),
+    effort: effortArgument("\u63A8\u8AD6\u306E\u6DF1\u3055\u3002\u5FB9\u5E95\u7684\u306A\u30EC\u30D3\u30E5\u30FC\u306A\u3089xhigh\u3001\u8EFD\u3044\u78BA\u8A8D\u306A\u3089medium\u3002"),
     evaluator_mode: external_exports.enum(["single", "ensemble", "debate"]).optional().describe(
       "\u54C1\u8CEA\u30EB\u30FC\u30D7\u6642\u306E\u63A1\u70B9\u30E2\u30FC\u30C9\u3002single \u306F1\u56DE\u3001ensemble \u306F\u72EC\u7ACB\u63A1\u70B9\u3092\u8907\u6570\u56DE\u3001debate \u306FFable\u306B\u5185\u90E8\u53CD\u8A3C\u3092\u8981\u6C42\u3059\u308B\u3002\u30C7\u30D5\u30A9\u30EB\u30C8\u306F single\u3002"
     ),
     review_repeats: external_exports.number().int().min(1).max(3).optional().describe("ensemble \u63A1\u70B9\u306E\u56DE\u6570\u3002\u6700\u59273\u3002\u672A\u6307\u5B9A\u306A\u3089 ensemble \u30673\u3001\u305D\u306E\u4ED6\u30671\u3002")
   },
-  async ({ cwd, context, session_id, loop_id, effort, evaluator_mode, review_repeats }, extra) => {
+  async ({ cwd, context, session_id, loop_id, model, effort, evaluator_mode, review_repeats }, extra) => {
     const loop = readLoop(cwd, loop_id);
     const state = loop?.state;
     const hasLoop = Boolean(state?.threshold);
@@ -22229,6 +22243,8 @@ ${join(loop.dir, "criteria.md")} \u3092\u30E6\u30FC\u30B6\u30FC\u306B\u63D0\u793
       });
     }
     const loopMode = Boolean(state?.active && state?.criteria_approved);
+    const reviewModel = model || state?.model || void 0;
+    const reviewEffort = effort || (EFFORT_LEVELS.has(state?.effort) ? state.effort : void 0);
     let prompt;
     if (loopMode) {
       const taskText = safeReadLoopFile(loop, "task.md");
@@ -22274,7 +22290,8 @@ ${context}
 \u3053\u306E\u63A1\u70B9\u306F ensemble run ${i + 1}/${repeats} \u3067\u3059\u3002\u4ED6\u306E\u63A1\u70B9\u8005\u306E\u7D50\u679C\u306F\u898B\u305A\u3001\u72EC\u7ACB\u306B\u5224\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002` : prompt,
         cwd,
         sessionId: repeats > 1 ? void 0 : session_id,
-        effort,
+        model: reviewModel,
+        effort: reviewEffort,
         onProgress: makeProgressReporter(extra),
         signal: extra?.signal
       });
@@ -22288,6 +22305,7 @@ ${context}
 ${item.text}`).join("\n\n---\n\n"),
       rawText: results.map((item) => item.rawText || item.text).join("\n\n---\n\n"),
       sessionId: results[0]?.sessionId || "",
+      model: results[0]?.model || reviewModel || DEFAULT_MODEL,
       effort: results[0]?.effort || "",
       costUsd: results.reduce((sum, item) => sum + (typeof item.costUsd === "number" ? item.costUsd : 0), 0)
     };
@@ -22311,6 +22329,8 @@ ${item.text}`).join("\n\n---\n\n"),
               {
                 error: "missing_or_invalid_eval_json",
                 evaluator_mode: evaluator_mode || "single",
+                model: res.model || reviewModel || DEFAULT_MODEL,
+                effort: res.effort || reviewEffort || "default(high)",
                 raw_text: res.rawText || res.text,
                 evaluated_at: (/* @__PURE__ */ new Date()).toISOString()
               },
@@ -22344,6 +22364,8 @@ ${item.text}`).join("\n\n---\n\n"),
                 threshold,
                 iteration: iter,
                 evaluator_mode: evaluator_mode || "single",
+                model: res.model || reviewModel || DEFAULT_MODEL,
+                effort: res.effort || reviewEffort || "default(high)",
                 ensemble_size: ev.ensemble_size || 1,
                 raw_scores: ev.raw_scores || [score],
                 changed_paths: changedPaths,
@@ -22385,4 +22407,4 @@ ${item.text}`).join("\n\n---\n\n"),
 );
 var transport = new StdioServerTransport();
 await server.connect(transport);
-log(`ready v${VERSION} (model=${MODEL}, claude=${CLAUDE_BIN}, platform=${process.platform})`);
+log(`ready v${VERSION} (defaultModel=${DEFAULT_MODEL}, claude=${CLAUDE_BIN}, platform=${process.platform})`);
