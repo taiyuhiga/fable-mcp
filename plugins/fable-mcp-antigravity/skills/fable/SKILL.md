@@ -19,8 +19,11 @@ Use the `fable` MCP server as an external read-only Fable 5 planning and evaluat
 
 - Always pass the current project root as an absolute path in `cwd`.
 - For follow-up Fable conversations, pass the returned `session_id`.
+- Fable 5 is the default. If the user names any Claude model, pass its Claude Code alias/full ID in `model`; do not use a fixed allowlist. Common mappings: Opus 4.8 -> `claude-opus-4-8`, Opus 4.7 -> `claude-opus-4-7`, Opus 4.6 -> `claude-opus-4-6`, Sonnet 5 -> `claude-sonnet-5`.
+- Preserve the selected model on session follow-ups. Quality-loop reviews inherit the plan model unless explicitly overridden.
 - If the user says "max", "deep", or "じっくり", pass `effort: "max"` or `effort: "xhigh"`.
 - If the user says "quick", "light", or "軽く", pass `effort: "medium"`.
+- Pass explicit `low`, `medium`, `high`, `xhigh`, or `max` exactly. Let Claude Code reject unsupported model/effort pairs; never silently downgrade.
 
 ## Output Handling
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * fable-mcp — Claude Fable 5 を「設計・深い推論役」として MCP クライアント
+ * fable-mcp — Claude Fable 5 (デフォルト) または指定したClaudeモデルを
+ * 「設計・深い推論役」として MCP クライアント
  * (OpenAI Codex など) から呼び出すための MCP サーバー。
  *
  * 内部では Claude Code のヘッドレスモード (`claude -p`) を
- * `--model claude-fable-5 --permission-mode plan` で起動する。
+ * `--model <per-call model or claude-fable-5> --permission-mode plan` で起動する。
  * プランモード = 読み取り専用なので、Fable はリポジトリを探索できるが
  * ファイルの変更は一切できない。実装はホスト側エージェント (Codex) が行う。
  *
@@ -28,8 +29,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const VERSION = "0.8.3";
-const MODEL = process.env.FABLE_MODEL || "claude-fable-5";
+const VERSION = "0.9.0";
+const DEFAULT_MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 const TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1000); // 20分
 const MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60); // 0 で無制限
 const EFFORT = process.env.FABLE_EFFORT || ""; // 空ならモデルのデフォルト (high 相当)
@@ -37,7 +38,9 @@ const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const HEARTBEAT_MS = 20 * 1000;
 const IS_WIN = process.platform === "win32";
 
-const MODEL_RE = /^[\w.:-]+$/;
+// First-party IDs/aliases plus Bedrock/Vertex-style IDs. Keep shell metacharacters,
+// whitespace, and quotes out because Windows launches .cmd through a shell.
+const MODEL_RE = /^[A-Za-z0-9._:@/-]+$/;
 const SESSION_ID_RE = /^[0-9a-fA-F][0-9a-fA-F-]{7,63}$/;
 
 const log = (...args) => console.error("[fable-mcp]", ...args);
@@ -57,6 +60,7 @@ Relay:
 
 Continuation:
 - Pass the returned session_id for follow-up questions in the same Fable conversation.
+- If the user names a model, pass it in model. Map common names exactly: Fable 5 -> claude-fable-5, Opus 4.8 -> claude-opus-4-8, Opus 4.7 -> claude-opus-4-7, Opus 4.6 -> claude-opus-4-6, Sonnet 5 -> claude-sonnet-5. Other Claude Code aliases/full model IDs may be passed through. If unspecified, omit model so Fable 5 remains the default.
 - If the user says max/deep/じっくり, pass effort=max or xhigh; if they say quick/light/軽く, pass effort=medium.
 `.trim();
 
@@ -92,10 +96,12 @@ const SERVER_FILE = fileURLToPath(import.meta.url);
  * - onProgress(message) は Fable がツールを使うたび / 20秒ごとの生存確認で呼ばれる
  * - signal (AbortSignal) が中断されたら子プロセスを kill する
  */
-function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
+function runClaude({ prompt, cwd, sessionId, onProgress, signal, model, effort }) {
   return new Promise((resolve) => {
-    if (!MODEL_RE.test(MODEL)) {
-      resolve({ isError: true, text: `FABLE_MODEL の値が不正です: ${MODEL}` });
+    // 呼び出しごとの model 指定 > FABLE_MODEL 環境変数 > Claude Fable 5
+    const modelName = model || DEFAULT_MODEL;
+    if (!MODEL_RE.test(modelName)) {
+      resolve({ isError: true, text: `model の値が不正です: ${modelName}` });
       return;
     }
     // 呼び出しごとの effort 指定 > FABLE_EFFORT 環境変数 > モデルのデフォルト
@@ -121,7 +127,7 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
     const args = [
       "-p",
       "--model",
-      MODEL,
+      modelName,
       "--permission-mode",
       "plan",
       "--output-format",
@@ -133,11 +139,11 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
     if (sessionId) args.push("--resume", sessionId);
 
     // Windows は .cmd 起動のため shell 経由。パスの空白対策で引用符を付ける。
-    // 可変値は stdin(prompt) と検証済みの MODEL / sessionId のみなので安全。
+    // 可変値は stdin(prompt) と検証済みの modelName / sessionId のみなので安全。
     const command = IS_WIN ? `"${CLAUDE_BIN}"` : CLAUDE_BIN;
 
     const startedAt = Date.now();
-    log(`spawn: ${CLAUDE_BIN} (model=${MODEL}, effort=${effortLevel || "default"}, cwd=${cwd || process.cwd()}, resume=${sessionId || "-"}, maxTurns=${MAX_TURNS || "∞"})`);
+    log(`spawn: ${CLAUDE_BIN} (model=${modelName}, effort=${effortLevel || "default"}, cwd=${cwd || process.cwd()}, resume=${sessionId || "-"}, maxTurns=${MAX_TURNS || "∞"})`);
 
     let child;
     try {
@@ -273,12 +279,13 @@ function runClaude({ prompt, cwd, sessionId, onProgress, signal, effort }) {
             : "";
         const footer =
           `${capNote}\n\n---\n[fable-mcp] session_id: ${resultEvent.session_id || "n/a"}` +
-          ` (同じ会話を続けるには次回この session_id を渡す) | effort: ${effortLevel || "default(high)"} | cost: ${cost} | ${turns} | ${elapsedSec}s`;
+          ` (同じ会話を続けるには次回この session_id を渡す) | model: ${modelName} | effort: ${effortLevel || "default(high)"} | cost: ${cost} | ${turns} | ${elapsedSec}s`;
         resolve({
           isError: Boolean(resultEvent.is_error),
           text: resultEvent.result + footer,
           rawText: resultEvent.result,
           sessionId: resultEvent.session_id || "",
+          model: modelName,
           effort: effortLevel || "default(high)",
           costUsd,
           turns: resultEvent.num_turns ?? null,
@@ -325,7 +332,7 @@ function fableDir(cwd) {
   return join(cwd, ".fable");
 }
 
-function saveLastPlan(cwd, { planText, task, sessionId, effort }) {
+function saveLastPlan(cwd, { planText, task, sessionId, model, effort }) {
   mkdirSync(fableDir(cwd), { recursive: true });
   writeFileSync(join(fableDir(cwd), "last-plan.md"), planText);
   writeFileSync(
@@ -333,7 +340,7 @@ function saveLastPlan(cwd, { planText, task, sessionId, effort }) {
     JSON.stringify(
       {
         saved_at: new Date().toISOString(),
-        model: MODEL,
+        model: model || DEFAULT_MODEL,
         session_id: sessionId || "",
         effort: effort || "",
         task,
@@ -452,7 +459,7 @@ function writeLoopState(loop, state) {
   writeFileSync(loop.statePath, JSON.stringify(state, null, 2));
 }
 
-function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", effort = "", costUsd = null, autoApprove = false } = {}) {
+function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", model = "", effort = "", costUsd = null, autoApprove = false } = {}) {
   const loopId = makeLoopId();
   const loop = sessionLoopRef(cwd, loopId);
   const baseline = workingTreeFingerprint(cwd);
@@ -478,6 +485,7 @@ function initLoop(cwd, task, criteriaText, threshold, max, { sessionId = "", eff
     cumulative_cost_usd: typeof costUsd === "number" ? costUsd : 0,
     last_cost_usd: typeof costUsd === "number" ? costUsd : 0,
     fable_session_id: sessionId || "",
+    model: model || DEFAULT_MODEL,
     project_dir: cwd,
     effort: effort || "",
     eval_repair_attempts: 0,
@@ -1021,7 +1029,7 @@ function statusText(cwd) {
     `- project cwd: ${projectCwd}`,
     "",
     "## Claude Code / Fable",
-    `- model: ${MODEL}`,
+    `- default model: ${DEFAULT_MODEL}`,
     `- claude binary: ${CLAUDE_BIN} (${claude.source})`,
     `- claude check: ${claude.ok ? "ok" : "attention"}${claude.version ? ` | ${claude.version}` : ` | ${claude.detail}`}`,
     `- auth/billing mode: ${authMode}`,
@@ -1041,7 +1049,7 @@ function statusText(cwd) {
     "",
     "## Notes",
     "- This status check is local-only. It does not call Fable and does not spend API credits.",
-    "- fable_plan / fable_ask / fable_review start `claude -p --model claude-fable-5 --permission-mode plan`.",
+    `- fable_plan / fable_ask / fable_review start \`claude -p --model <per-call model or ${DEFAULT_MODEL}> --permission-mode plan\`.`,
     "- Fable runs read-only through Claude Code plan mode. Codex remains the implementation agent.",
     warnings.length ? "" : "- No obvious local setup warnings.",
     ...warnings.map((warning) => `- Warning: ${warning}`),
@@ -1054,6 +1062,26 @@ const server = new McpServer(
   { name: "fable-mcp", version: VERSION },
   { instructions: FABLE_MCP_INSTRUCTIONS }
 );
+
+const modelArgument = () =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(256)
+    .regex(MODEL_RE, "Claude Code が受け付ける安全なモデル名/IDを指定してください。")
+    .optional()
+    .describe(
+      "この呼び出しだけで使うClaudeモデル。例: claude-fable-5 / claude-opus-4-8 / claude-opus-4-7 / claude-opus-4-6 / claude-sonnet-5 / opus / sonnet。Claude Codeが受け付ける将来のモデルIDも指定可能。未指定ならFABLE_MODEL、それも未指定ならclaude-fable-5。"
+    );
+
+const effortArgument = (description) =>
+  z
+    .enum(["low", "medium", "high", "xhigh", "max"])
+    .optional()
+    .describe(
+      `${description} 完全なeffort値は low / medium / high / xhigh / max。モデルが対応しない組み合わせはClaude CLIがエラーを返す。未指定ならFABLE_EFFORT、それも未指定ならモデルのデフォルト。`
+    );
 
 server.tool(
   "fable_status",
@@ -1160,7 +1188,7 @@ server.tool(
 
 server.tool(
   "fable_plan",
-  "Claude Fable 5 (deep-reasoning architect) に実装プランの設計を依頼する。複数ファイルにまたがる実装・新機能・アーキテクチャ判断を伴うタスクでは、実装を始める前に必ずこれを呼ぶこと。Fable はリポジトリを読み取り専用で探索してから設計する。応答には数分かかることがある。返ってきたプランに従って実装すること。",
+  "Claudeモデル (デフォルト: Fable 5) に実装プランの設計を依頼する。modelを指定するとOpus、Sonnet、その他Claude Code対応モデルへ呼び出し単位で切り替えられる。モデルはリポジトリを読み取り専用で探索してから設計する。応答には数分かかることがある。返ってきたプランに従って実装すること。",
   {
     task: z
       .string()
@@ -1172,12 +1200,10 @@ server.tool(
       .string()
       .optional()
       .describe("前回の応答に含まれる session_id。渡すと同じ会話の続きとしてフォローアップできる。"),
-    effort: z
-      .enum(["low", "medium", "high", "xhigh", "max"])
-      .optional()
-      .describe(
-        "推論の深さ。ユーザーが「じっくり/深く/本気で」と言ったら xhigh か max、「軽く/サクッと」と言ったら medium。未指定ならサーバーのデフォルト。"
-      ),
+    model: modelArgument(),
+    effort: effortArgument(
+      "推論の深さ。ユーザーが『じっくり/深く/本気で』と言ったらxhighかmax、『軽く/サクッと』と言ったらmedium。"
+    ),
     loop_threshold: z
       .number()
       .int()
@@ -1201,7 +1227,7 @@ server.tool(
         "true の場合だけ、Fable が作った受け入れ基準を人間承認なしで即アクティブ化する。通常は省略し、fable_loop_approve で明示承認する。"
       ),
   },
-  async ({ task, cwd, session_id, effort, loop_threshold, loop_max_iterations, loop_auto_approve_criteria }, extra) => {
+  async ({ task, cwd, session_id, model, effort, loop_threshold, loop_max_iterations, loop_auto_approve_criteria }, extra) => {
     const threshold = loop_threshold != null ? Math.floor(loop_threshold) : null;
     const maxIter = Math.floor(loop_max_iterations ?? 4);
     const criteriaSection =
@@ -1218,7 +1244,8 @@ server.tool(
 </criteria>
 採点軸のキーは英数字スネークケースで3〜6個。周回をまたいで固定され、後から増減できない前提で選ぶこと。曖昧な形容詞 (「良い」「ちゃんとした」) は数えられる事実か採点可能な観点に翻訳すること。`
         : "";
-    const prompt = `あなたは2エージェント構成の「アーキテクト」役です。あなた (Claude Fable 5) が設計し、別の実装エージェント (Codex) がコードを書きます。
+    const selectedModel = model || DEFAULT_MODEL;
+    const prompt = `あなたは2エージェント構成の「アーキテクト」役です。あなた (選択されたClaudeモデル: ${selectedModel}) が設計し、別の実装エージェント (Codex) がコードを書きます。
 
 このリポジトリを必要なだけ探索し、深く考えた上で、以下のタスクの実装プランを書いてください。プランは実装エージェントがそのまま実行できる具体性で:
 - ゴールと主要な設計判断 (理由も簡潔に)
@@ -1232,13 +1259,14 @@ server.tool(
 <task>
 ${task}
 </task>`;
-    const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    const res = await runClaude({ prompt, cwd, sessionId: session_id, model, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
     if (!res.isError && res.rawText) {
       try {
         saveLastPlan(cwd, {
           planText: res.rawText,
           task,
           sessionId: res.sessionId,
+          model: res.model,
           effort: res.effort,
         });
         res.text += `\n[fable-mcp] Fable プラン原文を ${join(cwd, ".fable", "last-plan.md")} に保存しました。`;
@@ -1252,6 +1280,7 @@ ${task}
       try {
         const loop = initLoop(cwd, task, criteriaText, threshold, maxIter, {
           sessionId: res.sessionId,
+          model: res.model,
           effort: res.effort,
           costUsd: res.costUsd,
           autoApprove: Boolean(loop_auto_approve_criteria),
@@ -1279,7 +1308,7 @@ ${task}
 
 server.tool(
   "fable_ask",
-  "Claude Fable 5 に深い推論が必要な質問・相談をする。ユーザーが「Fable」「Fable5」「フェイブル」に言及したとき (例:「Fable5に聞いて」) は、その内容をこのツールに渡すこと。技術選定・トレードオフ分析・難しいデバッグの仮説出しなどに向く。",
+  "Claudeモデル (デフォルト: Fable 5) に深い推論が必要な質問・相談をする。modelを指定すると任意のClaude Code対応モデルへ切り替えられる。技術選定・トレードオフ分析・難しいデバッグの仮説出しなどに向く。",
   {
     question: z.string().describe("質問・相談の内容。背景と文脈を含めて書く。"),
     cwd: z
@@ -1290,27 +1319,25 @@ server.tool(
       .string()
       .optional()
       .describe("前回の応答に含まれる session_id。渡すと同じ会話の続きになる。"),
-    effort: z
-      .enum(["low", "medium", "high", "xhigh", "max"])
-      .optional()
-      .describe(
-        "推論の深さ。ユーザーが「じっくり/深く/本気で」と言ったら xhigh か max、「軽く/サクッと」と言ったら medium。未指定ならサーバーのデフォルト。"
-      ),
+    model: modelArgument(),
+    effort: effortArgument(
+      "推論の深さ。ユーザーが『じっくり/深く/本気で』と言ったらxhighかmax、『軽く/サクッと』と言ったらmedium。"
+    ),
   },
-  async ({ question, cwd, session_id, effort }, extra) => {
+  async ({ question, cwd, session_id, model, effort }, extra) => {
     const prompt = `あなたは深い推論を行うコンサルタントです。以下の質問に、必要ならこのリポジトリの関連ファイルを確認した上で、よく考えて答えてください。質問と同じ言語で回答してください。
 
 <question>
 ${question}
 </question>`;
-    const res = await runClaude({ prompt, cwd, sessionId: session_id, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
+    const res = await runClaude({ prompt, cwd, sessionId: session_id, model, effort, onProgress: makeProgressReporter(extra), signal: extra?.signal });
     return toToolResult(withRelayDirective(res, "回答"));
   }
 );
 
 server.tool(
   "fable_review",
-  "実装完了後、Claude Fable 5 にコードレビューを依頼する。現在のリポジトリの未コミット変更 (git diff) を Fable が読み、バグ・設計との乖離・簡素化の余地を指摘する。大きな実装の後に呼ぶとよい。品質ループ (.fable-loop/) が有効なプロジェクトでは「採点係」として動き、受け入れ基準に照らした絶対評価スコアが state.json に機械記録される (未達なら Stop フックが自動で差し戻す)。",
+  "実装完了後、Claudeモデル (デフォルト: Fable 5) にコードレビューを依頼する。modelを指定すると任意のClaude Code対応モデルへ切り替えられる。現在のリポジトリの未コミット変更を読み、バグ・設計との乖離・簡素化の余地を指摘する。品質ループではplan時のモデルをreviewでも自動維持する。",
   {
     cwd: z.string().describe("対象プロジェクトのルート絶対パス。"),
     context: z
@@ -1325,12 +1352,8 @@ server.tool(
       .string()
       .optional()
       .describe("品質ループの loop_id。省略時は .fable-loop/current.json の現在ループを使う。"),
-    effort: z
-      .enum(["low", "medium", "high", "xhigh", "max"])
-      .optional()
-      .describe(
-        "推論の深さ。徹底的なレビューなら xhigh、軽い確認なら medium。未指定ならサーバーのデフォルト。"
-      ),
+    model: modelArgument(),
+    effort: effortArgument("推論の深さ。徹底的なレビューならxhigh、軽い確認ならmedium。"),
     evaluator_mode: z
       .enum(["single", "ensemble", "debate"])
       .optional()
@@ -1345,7 +1368,7 @@ server.tool(
       .optional()
       .describe("ensemble 採点の回数。最大3。未指定なら ensemble で3、その他で1。"),
   },
-  async ({ cwd, context, session_id, loop_id, effort, evaluator_mode, review_repeats }, extra) => {
+  async ({ cwd, context, session_id, loop_id, model, effort, evaluator_mode, review_repeats }, extra) => {
     const loop = readLoop(cwd, loop_id);
     const state = loop?.state;
     const hasLoop = Boolean(state?.threshold);
@@ -1358,6 +1381,9 @@ server.tool(
       });
     }
     const loopMode = Boolean(state?.active && state?.criteria_approved);
+    // 品質ループでは、plan時に選んだモデルをreviewでも自動的に維持する。
+    const reviewModel = model || state?.model || undefined;
+    const reviewEffort = effort || (EFFORT_LEVELS.has(state?.effort) ? state.effort : undefined);
 
     let prompt;
     if (loopMode) {
@@ -1404,7 +1430,8 @@ ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : 
         prompt: repeats > 1 ? `${prompt}\n\nこの採点は ensemble run ${i + 1}/${repeats} です。他の採点者の結果は見ず、独立に判定してください。` : prompt,
         cwd,
         sessionId: repeats > 1 ? undefined : session_id,
-        effort,
+        model: reviewModel,
+        effort: reviewEffort,
         onProgress: makeProgressReporter(extra),
         signal: extra?.signal,
       });
@@ -1419,6 +1446,7 @@ ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : 
             text: results.map((item, idx) => `# Fable evaluator ${idx + 1}\n\n${item.text}`).join("\n\n---\n\n"),
             rawText: results.map((item) => item.rawText || item.text).join("\n\n---\n\n"),
             sessionId: results[0]?.sessionId || "",
+            model: results[0]?.model || reviewModel || DEFAULT_MODEL,
             effort: results[0]?.effort || "",
             costUsd: results.reduce((sum, item) => sum + (typeof item.costUsd === "number" ? item.costUsd : 0), 0),
           };
@@ -1443,6 +1471,8 @@ ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : 
               {
                 error: "missing_or_invalid_eval_json",
                 evaluator_mode: evaluator_mode || "single",
+                model: res.model || reviewModel || DEFAULT_MODEL,
+                effort: res.effort || reviewEffort || "default(high)",
                 raw_text: res.rawText || res.text,
                 evaluated_at: new Date().toISOString(),
               },
@@ -1479,6 +1509,8 @@ ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : 
                 threshold,
                 iteration: iter,
                 evaluator_mode: evaluator_mode || "single",
+                model: res.model || reviewModel || DEFAULT_MODEL,
+                effort: res.effort || reviewEffort || "default(high)",
                 ensemble_size: ev.ensemble_size || 1,
                 raw_scores: ev.raw_scores || [score],
                 changed_paths: changedPaths,
@@ -1525,4 +1557,4 @@ ${context ? `\n照合すべき設計意図:\n<design>\n${context}\n</design>` : 
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-log(`ready v${VERSION} (model=${MODEL}, claude=${CLAUDE_BIN}, platform=${process.platform})`);
+log(`ready v${VERSION} (defaultModel=${DEFAULT_MODEL}, claude=${CLAUDE_BIN}, platform=${process.platform})`);
