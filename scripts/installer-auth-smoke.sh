@@ -41,15 +41,37 @@ exit 0
 EOF
 chmod +x "$BIN/claude.pending"
 
+# On Windows the real npm package exposes claude.cmd. Keep the extensionless
+# shim for Git Bash's `command -v`, and use the .cmd shim for Node/cmd.exe.
+IS_WINDOWS=0
+case "$(uname -s 2>/dev/null || true)" in
+  MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
+esac
+if [ "$IS_WINDOWS" -eq 1 ]; then
+  cat >"$BIN/claude.cmd.pending" <<'EOF'
+@echo off
+if "%1"=="--version" echo fake claude 1.0& exit /b 0
+if "%1"=="-p" echo {"result":"AUTH_OK","is_error":false}& exit /b 0
+echo {"loggedIn":true}
+exit /b 0
+EOF
+fi
+
 cat >"$BIN/npm" <<'EOF'
 #!/bin/sh
 echo "$*" >>"$FAKE_NPM_LOG"
 mv "$FAKE_BIN/claude.pending" "$FAKE_BIN/claude"
+if [ -f "$FAKE_BIN/claude.cmd.pending" ]; then
+  mv "$FAKE_BIN/claude.cmd.pending" "$FAKE_BIN/claude.cmd"
+fi
 exit 0
 EOF
 chmod +x "$BIN/npm"
 
 OUTPUT="$TMP/output.txt"
+if [ "$IS_WINDOWS" -eq 1 ]; then
+  export FABLE_CLAUDE_BIN="$(cygpath -w "$BIN/claude.cmd")"
+fi
 PATH="$BIN:/usr/bin:/bin:/usr/local/bin" \
 FAKE_BIN="$BIN" \
 FAKE_NPM_LOG="$TMP/npm.log" \
