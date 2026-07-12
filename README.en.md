@@ -30,12 +30,12 @@ If you want to set up Codex from a terminal, use the command for your OS:
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.1/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.1/install.ps1 | iex
 ```
 
 The installer checks Node.js and Codex CLI, installs Claude Code CLI automatically when missing, and installs the Codex Plugin. It then offers Claude account login as option 1/default and Anthropic API-key billing as option 2, and requires a minimal live Fable response before reporting success. Agent-driven setup uses the structured `AskUserQuestion` UI. API keys are read without echo and are never passed in command arguments. Close the Codex desktop app before running it, then restart Codex when it finishes and ask `Check the Fable status`.
@@ -107,7 +107,7 @@ Prerequisites:
 Install the pinned plugin release:
 
 ```sh
-codex plugin marketplace add sam-mountainman/fable-mcp --ref v0.9.0
+codex plugin marketplace add sam-mountainman/fable-mcp --ref v0.9.1
 codex plugin add fable-mcp@fable-mcp
 ```
 

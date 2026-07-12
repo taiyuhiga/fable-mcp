@@ -22,13 +22,13 @@ https://github.com/sam-mountainman/fable-mcp をセットアップして。
 macOS / Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.1/install.sh | bash
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/sam-mountainman/fable-mcp/v0.9.1/install.ps1 | iex
 ```
 
 ### Cursorだけ

@@ -1,6 +1,6 @@
 {
   "name": "fable-mcp",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Use Claude Fable 5 as a deep-reasoning architect and evaluator inside OpenAI Codex.",
   "author": {
     "name": "Taiyu Higa",

@@ -25,6 +25,7 @@ chmod +x "$BIN/node"
 
 cat >"$BIN/codex" <<'EOF'
 #!/bin/sh
+echo "$*" >>"$FAKE_CODEX_LOG"
 echo "fake codex $*"
 exit 0
 EOF
@@ -75,11 +76,20 @@ fi
 PATH="$BIN:/usr/bin:/bin:/usr/local/bin" \
 FAKE_BIN="$BIN" \
 FAKE_NPM_LOG="$TMP/npm.log" \
+FAKE_CODEX_LOG="$TMP/codex.log" \
 CODEX_HOME="$HOME_DIR/.codex" \
 ANTHROPIC_API_KEY="installer-smoke-secret" \
 bash "$ROOT/install.sh" --auth api --ref main >"$OUTPUT" 2>&1
 
 grep -q 'install -g @anthropic-ai/claude-code' "$TMP/npm.log"
+grep -E '^(plugin remove|plugin marketplace remove|plugin marketplace add|plugin add)' "$TMP/codex.log" >"$TMP/codex-plugin-ops.log"
+cat >"$TMP/codex-expected.log" <<'EOF'
+plugin remove fable-mcp@fable-mcp
+plugin marketplace remove fable-mcp
+plugin marketplace add sam-mountainman/fable-mcp --ref main
+plugin add fable-mcp@fable-mcp
+EOF
+diff -u "$TMP/codex-expected.log" "$TMP/codex-plugin-ops.log"
 grep -q 'Authentication and claude-fable-5 access verified successfully' "$OUTPUT"
 grep -q 'ANTHROPIC_API_KEY = "installer-smoke-secret"' "$HOME_DIR/.codex/config.toml"
 if grep -q 'installer-smoke-secret' "$OUTPUT"; then

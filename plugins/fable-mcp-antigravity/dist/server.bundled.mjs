@@ -21109,7 +21109,7 @@ var StdioServerTransport = class {
 };
 
 // server.mjs
-var VERSION = "0.9.0";
+var VERSION = "0.9.1";
 var DEFAULT_MODEL = process.env.FABLE_MODEL || "claude-fable-5";
 var TIMEOUT_MS = Number(process.env.FABLE_TIMEOUT_MS || 20 * 60 * 1e3);
 var MAX_TURNS = Number(process.env.FABLE_MAX_TURNS ?? 60);
